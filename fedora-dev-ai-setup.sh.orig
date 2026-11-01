@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# Fedora 44/45 KDE: dev + local AI setup for the RTX 5090 machine
+# Installs: NVIDIA driver + CUDA (RPM Fusion), dev tools, Rust, VS Code,
+#           Claude Code, OpenCode, Codex CLI, fetches Strata, and gaming tools.
+# Run as your normal user (not root):  bash fedora-dev-ai-setup.sh
+# Skip the gaming part:                bash fedora-dev-ai-setup.sh --no-gaming
+set -euo pipefail
+
+if [[ $EUID -eq 0 ]]; then
+  echo "Run this as your normal user, not root. It uses sudo where needed." >&2
+  exit 1
+fi
+
+GAMING=true
+for arg in "$@"; do
+  case "$arg" in
+    --no-gaming) GAMING=false ;;
+    *) echo "Unknown option: $arg" >&2; exit 1 ;;
+  esac
+done
+
+step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
+
+# 1. System update --------------------------------------------------------
+step "Updating the system"
+sudo dnf upgrade --refresh -y
+
+# 2. RPM Fusion (free + nonfree) -------------------------------------------
+step "Enabling RPM Fusion"
+FED="$(rpm -E %fedora)"
+sudo dnf install -y \
+  "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${FED}.noarch.rpm" \
+  "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-${FED}.noarch.rpm"
+
+# 3. Secure Boot key (only if Secure Boot is on) ---------------------------
+sudo dnf install -y mokutil
+SB_ON=false
+if mokutil --sb-state 2>/dev/null | grep -qi "enabled"; then
+  SB_ON=true
+  step "Secure Boot is ON: creating a signing key for the NVIDIA module"
+  sudo dnf install -y kmodtool akmods openssl
+  sudo kmodgenca -a
+  echo "You'll now set a one-time password. Remember it: you type it once at the blue MOK screen after reboot."
+  sudo mokutil --import /etc/pki/akmods/certs/public_key.der
+fi
+
+# 4. NVIDIA driver + CUDA runtime -----------------------------------------
+step "Installing the NVIDIA driver and CUDA runtime"
+sudo dnf install -y kernel-devel akmod-nvidia xorg-x11-drv-nvidia-cuda nvtop
+
+step "Building the NVIDIA kernel module (can take a few minutes)"
+sudo akmods --force
+if modinfo -F version nvidia >/dev/null 2>&1; then
+  echo "NVIDIA module built: version $(modinfo -F version nvidia)"
+else
+  echo "WARNING: module not found yet. It will retry on next boot; check with: modinfo -F version nvidia"
+fi
+
+# 5. Dev tools -------------------------------------------------------------
+step "Installing dev tools"
+sudo dnf group install -y development-tools
+sudo dnf install -y \
+  git git-lfs gcc-c++ clang clang-tools-extra cmake ninja-build gdb \
+  python3 python3-pip python3-devel nodejs npm \
+  jq ripgrep fd-find htop curl wget unzip
+git lfs install
+
+# Rust (official rustup: stable toolchain + editor/lint tools)
+step "Installing Rust"
+if ! command -v rustup >/dev/null 2>&1 && [[ ! -x "$HOME/.cargo/bin/rustup" ]]; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+fi
+# shellcheck disable=SC1091
+source "$HOME/.cargo/env"
+rustup component add rust-analyzer clippy rustfmt
+
+# 6. VS Code (Microsoft repo) ---------------------------------------------
+step "Installing VS Code"
+sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
+sudo tee /etc/yum.repos.d/vscode.repo >/dev/null <<'EOF'
+[code]
+name=Visual Studio Code
+baseurl=https://packages.microsoft.com/yumrepos/vscode
+enabled=1
+autorefresh=1
+type=rpm-md
+gpgcheck=1
+gpgkey=https://packages.microsoft.com/keys/microsoft.asc
+EOF
+sudo dnf install -y code
+
+# 7. Claude Code (native installer, auto-updates) --------------------------
+step "Installing Claude Code"
+curl -fsSL https://claude.ai/install.sh | bash
+
+# 8. OpenCode --------------------------------------------------------------
+step "Installing OpenCode"
+curl -fsSL https://opencode.ai/install | bash
+
+# 8b. Codex CLI (OpenAI, terminal) -----------------------------------------
+step "Installing Codex CLI"
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+
+# 9. Strata (download only; install after reboot) --------------------------
+step "Fetching Strata"
+if [[ -d "$HOME/Strata/.git" ]]; then
+  git -C "$HOME/Strata" pull
+else
+  git clone https://github.com/Niko1221/Strata.git "$HOME/Strata"
+fi
+
+# 10. Gaming (optional) ----------------------------------------------------
+if $GAMING; then
+  step "Installing gaming tools"
+  # Steam (RPM Fusion nonfree), 32-bit NVIDIA libs for older/Proton games,
+  # controller udev rules, and the usual performance helpers.
+  sudo dnf install -y \
+    steam steam-devices \
+    xorg-x11-drv-nvidia-libs.i686 \
+    gamemode gamemode.i686 mangohud gamescope
+
+  # Epic/GOG launcher and Proton-GE manager from Flathub
+  sudo dnf install -y flatpak
+  flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+  flatpak install --user -y flathub \
+    com.heroicgameslauncher.hgl \
+    net.davidotek.pupgui2
+
+  # Let your user use GameMode
+  sudo usermod -aG gamemode "$USER" 2>/dev/null || true
+fi
+
+# 11. x3d-mode helper (9950X3D cache/frequency switch) ---------------------
+# Needs BIOS: CPPC Dynamic Preferred Cores = Driver.
+step "Installing x3d-mode helper"
+
+# Root-only setter: accepts exactly "cache" or "frequency", nothing else.
+sudo install -d -m 0755 /usr/local/libexec
+sudo tee /usr/local/libexec/x3d-mode-set >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+mode="${1:-}"
+case "$mode" in
+  cache|frequency) ;;
+  *) echo "usage: x3d-mode-set cache|frequency" >&2; exit 2 ;;
+esac
+shopt -s nullglob
+files=(/sys/bus/platform/drivers/amd_x3d_vcache/*/amd_x3d_mode)
+if (( ${#files[@]} == 0 )); then
+  echo "amd_x3d_vcache driver not active (BIOS CPPC must be 'Driver')." >&2
+  exit 1
+fi
+for f in "${files[@]}"; do echo "$mode" > "$f"; done
+EOF
+sudo chown root:root /usr/local/libexec/x3d-mode-set
+sudo chmod 0755 /usr/local/libexec/x3d-mode-set
+
+# Allow your user to run only that setter, only with those two values, without a password.
+SUDOERS_TMP="$(mktemp)"
+cat > "$SUDOERS_TMP" <<EOF
+$USER ALL=(root) NOPASSWD: /usr/local/libexec/x3d-mode-set cache, /usr/local/libexec/x3d-mode-set frequency
+EOF
+if sudo visudo -cf "$SUDOERS_TMP" >/dev/null; then
+  sudo install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/x3d-mode
+else
+  echo "WARNING: sudoers rule failed validation; x3d-mode will ask for your password." >&2
+fi
+rm -f "$SUDOERS_TMP"
+
+# User-facing command
+sudo tee /usr/local/bin/x3d-mode >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+shopt -s nullglob
+files=(/sys/bus/platform/drivers/amd_x3d_vcache/*/amd_x3d_mode)
+case "${1:-status}" in
+  game|cache)    sudo -n /usr/local/libexec/x3d-mode-set cache 2>/dev/null \
+                   || sudo /usr/local/libexec/x3d-mode-set cache ;;
+  dev|frequency) sudo -n /usr/local/libexec/x3d-mode-set frequency 2>/dev/null \
+                   || sudo /usr/local/libexec/x3d-mode-set frequency ;;
+  status) ;;
+  *) echo "usage: x3d-mode [game|dev|status]" >&2; exit 2 ;;
+esac
+if (( ${#files[@]} == 0 )); then
+  echo "x3d-mode: driver not active (set BIOS CPPC Dynamic Preferred Cores = Driver)."
+  exit 1
+fi
+echo "x3d-mode: $(cat "${files[0]}")"
+EOF
+sudo chmod 0755 /usr/local/bin/x3d-mode
+
+# GameMode hook: cache mode while a game runs, back to frequency after.
+if $GAMING; then
+  mkdir -p "$HOME/.config"
+  if [[ ! -f "$HOME/.config/gamemode.ini" ]]; then
+    cat > "$HOME/.config/gamemode.ini" <<'EOF'
+[custom]
+start=/usr/local/bin/x3d-mode game
+end=/usr/local/bin/x3d-mode dev
+script_timeout=10
+EOF
+  else
+    echo "NOTE: ~/.config/gamemode.ini exists; add these lines under [custom] yourself:"
+    echo "  start=/usr/local/bin/x3d-mode game"
+    echo "  end=/usr/local/bin/x3d-mode dev"
+  fi
+fi
+
+# Make sure ~/.local/bin is on PATH for claude
+if ! grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null; then
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+fi
+
+# Done ---------------------------------------------------------------------
+step "Done. Next steps:"
+if $SB_ON; then
+  echo " 1. Reboot. At the blue MOK screen: Enroll MOK > Continue > Yes > enter your password."
+else
+  echo " 1. Reboot."
+fi
+cat <<'EOF'
+ 2. Check the GPU:        nvidia-smi
+ 3. Log in to tools:      claude   /   opencode   /   codex
+    Check Rust:           rustc --version && cargo --version
+    Check CPU mode:       x3d-mode        (manual: x3d-mode game / x3d-mode dev)
+ 4. Install Strata:       cd ~/Strata && claude
+                          Ask Claude Code to follow docs/AI_SETUP.md (or run the Linux setup from the README).
+EOF
+if $GAMING; then
+  cat <<'EOF'
+ 5. Gaming:               Open Steam > Settings > Compatibility > enable Steam Play for all titles.
+                          Per-game launch options, e.g.:  gamemoderun mangohud %command%
+                          (gamemoderun also switches the CPU to cache mode and back automatically)
+                          Stop Strata before playing: it holds most of the GPU memory and RAM.
+EOF
+fi

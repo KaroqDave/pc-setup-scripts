@@ -1,0 +1,305 @@
+FEDORA GAMING + DEV SETUP GUIDE
+Written by fedora-dev-ai-setup.sh on 2026-11-01 16:05
+Refresh this file:  bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --guide
+Check the system:   bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --check
+
+CONTENTS
+  1. Steam launch options       8. GPU Screen Recorder
+  2. GameMode and X3D           9. LACT (optional)
+  3. MangoHud                  10. Sunshine (optional)
+  4. GOverlay                  11. Snapshots
+  5. DLSS swapper              12. NVIDIA driver updates
+  6. Proton, ntsync and HDR    13. Anti-cheat
+  7. Other game tools          14. System settings and how to undo them
+                               15. Current system state
+
+
+1. STEAM LAUNCH OPTIONS
+-----------------------
+Where: right-click a game > Properties > General > Launch Options.
+First time only: Steam > Settings > Compatibility > enable Steam Play for all titles.
+
+Order matters: VARIABLES first, then tools, then %command% last.
+
+  Everyday:
+    gamemoderun mangohud %command%
+
+  Games with DLSS:
+    gamemoderun mangohud dlss-swapper %command%
+
+  Confirm which DLSS is running (GE-Proton or Proton-CachyOS):
+    PROTON_DLSS_INDICATOR=1 gamemoderun mangohud dlss-swapper %command%
+
+  Native Wayland window (GE-Proton or Proton-CachyOS):
+    PROTON_ENABLE_WAYLAND=1 gamemoderun mangohud %command%
+
+  Through gamescope at your monitor's native mode:
+    gamemoderun gamescope -W 3840 -H 2160 -r 240 -f --adaptive-sync --mangoapp -- %command%
+
+  Render at 1440p and upscale with gamescope:
+    gamemoderun gamescope -W 3840 -H 2160 -w 2560 -h 1440 -r 240 -f -F fsr --mangoapp -- %command%
+
+
+2. GAMEMODE AND X3D
+-------------------
+"gamemoderun" does the following while a game runs, then undoes it on exit:
+  - switches the 9950X3D to cache mode (x3d-mode game)
+  - pins the game to the V-Cache cores (CPUs 0-7 and 16-23)
+  - sets the CPU governor to performance
+
+Check that it works, while a game is running:
+  gamemoded -s      should say "gamemode is active"
+  x3d-mode          should say "x3d-mode: cache"
+
+Manual control:
+  x3d-mode          show the current mode
+  x3d-mode game     cache mode, best for most games
+  x3d-mode dev      frequency mode, best for compiling and general work
+
+Settings file: ~/.config/gamemode.ini
+A game that wants more than these 16 threads can lose out from pinning. To test
+that, remove the pin_cores line and compare.
+
+
+3. MANGOHUD
+-----------
+The in-game overlay for FPS, frametimes, temperatures and usage.
+
+Default keys:
+  Right Shift + F12    show/hide the overlay
+  Right Shift + F10    next preset
+  Left Shift + F1      cycle the FPS limit
+  Left Shift + F2      start/stop logging performance to a file
+  Left Shift + F4      reload the config
+
+Config, highest priority first:
+  ~/.config/MangoHud/<application_name>.conf     one game only
+  ~/.config/MangoHud/MangoHud.conf               all games
+All options with explanations: /usr/share/doc/mangohud/MangoHud.conf.example
+GOverlay (next section) edits all of this with a GUI.
+
+
+4. GOVERLAY
+-----------
+A GUI for MangoHud, vkBasalt (sharpening and other effects) and OptiScaler
+(upscaler and frame generation swapping). Start it from the application menu.
+
+  - For one game: select the game. It gets its own config folder, and GOverlay
+    shows a launch command ending in %command%.
+  - Paste that into Steam's Launch Options, with gamemoderun in front:
+      gamemoderun <the command GOverlay shows>
+  - OptiScaler copies files into the game folder, so avoid it in online games
+    with anti-cheat.
+
+
+5. DLSS SWAPPER
+---------------
+"dlss-swapper" is a small wrapper you add per game. It does two things:
+  - PROTON_DLSS_UPGRADE=1 makes GE-Proton and Proton-CachyOS download newer DLSS
+    files. Other Proton builds, including Proton Experimental, ignore this.
+  - It selects the latest DLSS Super Resolution and Ray Reconstruction presets
+    and turns on the frame generation override. Those work with any Proton.
+
+How to use it:
+  1. Pick GE-Proton or Proton-CachyOS: Properties > Compatibility > Force a specific tool.
+  2. Launch options:  gamemoderun mangohud dlss-swapper %command%
+  3. To confirm, add PROTON_DLSS_INDICATOR=1 in front. A small DLSS text overlay
+     shows in-game. Remove the variable afterwards.
+
+Try it on single-player games first. It changes DLSS files, and how anti-cheat
+reacts to that varies by game.
+
+
+6. PROTON, NTSYNC AND HDR
+-------------------------
+Install new Proton builds: open ProtonUp-Qt, press "Add version", pick GE-Proton,
+then restart Steam. Choose it under Properties > Compatibility.
+
+ntsync: GE-Proton uses it automatically, no launch option needed. To confirm
+while a game runs:
+  lsof /dev/ntsync      should list the game's processes
+To turn it off for one game on GE-Proton: PROTON_NO_NTSYNC=1 %command%
+
+HDR: turn it on in KDE (System Settings > Display & Monitor), then in the game.
+GE-Proton detects HDR for DX11/DX12 automatically. If a game does not offer it,
+try PROTON_ENABLE_WAYLAND=1. Through gamescope, add --hdr-enabled instead.
+
+
+7. OTHER GAME TOOLS
+-------------------
+Protontricks installs Windows components into one game's Proton prefix:
+  flatpak run com.github.Matoking.protontricks --gui
+
+Lutris: to add GameMode and MangoHud, put "gamemoderun mangohud" in a game's
+Command prefix setting (Configure > System options).
+
+Heroic (Epic, GOG, Amazon): open a game's settings and turn on the GameMode and
+Mangohud options. Confirm GameMode with the checks in section 2.
+
+
+8. GPU SCREEN RECORDER
+----------------------
+Records and clips gameplay through NVENC with very low overhead, similar to
+ShadowPlay. Start it from the application menu, then pick the capture target,
+codec, and hotkeys in the app. Its Replay mode keeps the last few minutes so you
+can save a clip after something happens. Encoding on your RTX 5090 runs on a
+dedicated chip, so games keep their performance.
+
+
+9. LACT (optional, install with --lact)
+---------------------------------------
+GPU control panel: fan curves, power limit and clocks. Start it from the
+application menu. Your RTX 5090 allows a 400-600 W power limit, and lowering it
+is the simplest way to cut heat and noise. Changes need the background service:
+  systemctl status lactd
+
+
+10. SUNSHINE (optional, install with --sunshine)
+------------------------------------------------
+Streams your desktop and games to Moonlight on another device.
+  1. Open https://localhost:47990 straight away and create the admin login.
+  2. In Moonlight, add this PC and enter the PIN into the web page.
+Your Fedora firewall zone already allows the ports on your network.
+
+
+11. SNAPSHOTS
+-------------
+A snapshot of the system (not /home) is taken before every dnf transaction, and
+the last 10 are kept.
+
+  sudo snapper -c root list                     list snapshots
+  sudo snapper -c root status <pre>..<post>     see what changed
+  sudo snapper -c root undochange <pre>..<post> put those files back
+
+Btrfs Assistant does the same with a GUI. These undo file changes, but you can't
+boot into a snapshot, and /boot isn't included, so kernels aren't covered. They
+do not replace a backup.
+
+
+12. NVIDIA DRIVER UPDATES
+-------------------------
+After a kernel or driver update, the module is rebuilt in the background, which
+takes a few minutes. Before rebooting, confirm it finished by running the
+--check command from the top of this file.
+"Module built for the newest kernel" must say OK.
+
+If you boot to a black screen: restart, pick the previous kernel in the GRUB
+menu, then run:
+  sudo akmods --force --kernels <new kernel version>
+
+Flatpak apps need a runtime that matches the driver. After a driver update run:
+  flatpak update
+If --check still shows it as MISSING, Flathub hasn't published it yet.
+
+
+13. ANTI-CHEAT
+--------------
+Easy Anti-Cheat Linux v2 (for example Fortnite) needs Secure Boot, TPM 2.0,
+kernel lockdown and modules signed by a recognised authority. Your NVIDIA module
+is signed with your own local key, and Epic says an enrolled key doesn't satisfy
+this by itself, so expect EAC v2 games to refuse to run on this setup.
+
+
+14. SYSTEM SETTINGS AND HOW TO UNDO THEM
+----------------------------------------
+Each setting is one file. Delete it with sudo rm and reboot to undo it.
+
+  /etc/sysctl.d/90-gaming-dev.conf
+      BBR networking, MTU probing, file-watcher limit, max_map_count,
+      zram swap behaviour, earlier disk write flushing
+  /etc/modules-load.d/90-gaming-dev.conf
+      loads ntsync and BBR at boot
+  /etc/systemd/zram-generator.conf
+      16 GB zstd zram instead of Fedora's 8 GB lzo-rle
+  /etc/udev/rules.d/60-nvme-scheduler.rules
+      kyber on NVMe. Bazzite and CachyOS use this, Nobara stays on "none".
+  /etc/wireplumber/wireplumber.conf.d/51-disable-suspension.conf
+      keeps audio devices awake
+  /etc/pipewire/pipewire-pulse.conf.d/wine_gaming.conf
+      bigger Wine audio buffer, against crackling
+  /etc/dnf/libdnf5-plugins/actions.d/snapper.actions
+      the snapshot before each dnf transaction
+  ~/.config/environment.d/90-nvidia-shader-cache.conf
+      10 GB NVIDIA shader cache
+  ~/.config/gamemode.ini
+      X3D switching ([custom]) and core pinning ([cpu])
+
+
+15. CURRENT SYSTEM STATE
+------------------------
+OK = working   MISSING = not set up   REBOOT = takes effect after a reboot
+off = optional and not installed
+
+ Fedora release 44 (Forty Four), kernel 7.2.13-200.fc44.x86_64
+
+ Base system
+  OK       RPM Fusion repos
+  OK       Running the newest installed kernel
+  OK       Secure Boot key enrolled (or Secure Boot off)
+
+ NVIDIA (615.78.08)
+  OK       Kernel module loaded
+  OK       Open kernel module in use
+  OK       Module built for the newest kernel
+  OK       Loaded driver matches the installed packages
+  OK       CUDA runtime
+  OK       32-bit libraries
+  MISSING  Video acceleration (VA-API)
+  OK       Flatpak GL runtime matches the driver
+  OK       Flatpak 32-bit GL runtime matches the driver
+
+ Codecs
+  MISSING  Full ffmpeg
+  MISSING  GStreamer plugins
+
+ Dev tools
+  OK       Compiler toolchain
+  OK       Rust (rustup)
+  OK       VS Code
+  OK       Claude Code
+  OK       OpenCode
+  OK       Codex CLI
+  MISSING  Distrobox
+
+ Gaming
+  OK       Steam
+  MISSING  GameMode 64-bit
+  OK       GameMode 32-bit
+  OK       MangoHud 64-bit + 32-bit
+  OK       gamescope
+  MISSING  Lutris
+  MISSING  GOverlay
+  OK       Heroic
+  MISSING  MangoHud for Heroic
+  OK       ProtonUp-Qt
+  MISSING  Protontricks
+  MISSING  GPU Screen Recorder
+  MISSING  dlss-swapper
+  MISSING  10 GB shader cache
+  OK       x3d-mode helper
+  OK       x3d-mode runs without a password
+  OK       X3D driver active (BIOS CPPC = Driver)
+  OK       GameMode switches X3D mode
+  MISSING  GameMode pins games to the V-Cache cores
+
+ System tuning
+  OK       ntsync
+  MISSING  BBR congestion control
+  MISSING  vm.max_map_count
+  MISSING  File-watcher limit
+  MISSING  Earlier disk write flushing
+  MISSING  zram uses zstd
+  MISSING  kyber on NVMe
+  MISSING  Audio devices stay awake
+  MISSING  Wine audio crackle fix
+
+ Snapshots
+  MISSING  snapper root config
+  MISSING  Snapshot before each dnf transaction
+  MISSING  Btrfs Assistant
+
+ Optional
+  off      Sunshine game streaming (add with --sunshine)
+  off      LACT GPU control (add with --lact)
+
+ Summary: 28 OK, 24 missing, 0 waiting for a reboot
