@@ -1,5 +1,5 @@
 FEDORA GAMING + DEV SETUP GUIDE
-Written by fedora-dev-ai-setup.sh on 2026-11-01 19:44
+Written by fedora-dev-ai-setup.sh on 2026-11-01 19:46
 Refresh this file:  bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --guide
 Check the system:   bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --check
 
@@ -374,7 +374,7 @@ off = optional and not installed
   OK       GameMode 64-bit
   OK       GameMode 32-bit
   OK       MangoHud 64-bit + 32-bit
-  MISSING  MangoHud overlay config
+  OK       MangoHud overlay config
   OK       gamescope
   OK       Lutris
   OK       GOverlay
@@ -401,11 +401,11 @@ off = optional and not installed
   OK       zram uses zstd
   OK       Audio devices stay awake
   OK       Wine audio crackle fix
-  MISSING  Monthly Btrfs check of every drive
-  MISSING  Firewall opens only the ports in use
-  MISSING  10 parallel dnf downloads
-  MISSING  Laptop-only nvidia-powerd turned off
-  MISSING  Failing login autostarts turned off
+  OK       Monthly Btrfs check of every drive
+  OK       Firewall opens only the ports in use
+  OK       10 parallel dnf downloads
+  OK       Laptop-only nvidia-powerd turned off
+  OK       Failing login autostarts turned off
 
  Snapshots
   OK       snapper root config
@@ -416,4 +416,4 @@ off = optional and not installed
   off      Sunshine game streaming (add with --sunshine)
   off      LACT GPU control (add with --lact)
 
- Summary: 53 OK, 6 missing, 0 waiting for a reboot
+ Summary: 59 OK, 0 missing, 0 waiting for a reboot
