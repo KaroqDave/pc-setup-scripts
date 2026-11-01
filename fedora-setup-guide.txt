@@ -1,5 +1,5 @@
 FEDORA GAMING + DEV SETUP GUIDE
-Written by fedora-dev-ai-setup.sh on 2026-11-01 16:36
+Written by fedora-dev-ai-setup.sh on 2026-11-01 17:53
 Refresh this file:  bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --guide
 Check the system:   bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --check
 
@@ -45,7 +45,6 @@ Order matters: VARIABLES first, then tools, then %command% last.
 -------------------
 "gamemoderun" does the following while a game runs, then undoes it on exit:
   - switches the 9950X3D to cache mode (x3d-mode game)
-  - pins the game to the V-Cache cores (CPUs 0-7 and 16-23)
   - sets the CPU governor to performance
 
 Check that it works, while a game is running:
@@ -57,14 +56,15 @@ Manual control:
   x3d-mode game     cache mode, best for most games
   x3d-mode dev      frequency mode, best for compiling and general work
 
-Cache mode and pinning are two different things:
-  - Cache mode is a preference. The CPU favours the V-Cache cores, but game
-    threads can still land on the other, slower-cache cores.
-  - Pinning is a rule. The game can only run on the V-Cache cores.
+Cache mode is a preference. The CPU favours the V-Cache cores, but a busy game
+can still use the others. Core pinning is off, so games get all 32 threads.
+Helldivers 2 ran more stably that way: pinned to the 16 V-Cache threads, GPU
+usage kept dropping.
 
 Settings file: ~/.config/gamemode.ini
-A game that wants more than these 16 threads can lose out from pinning. To test
-that, remove the pin_cores line and compare.
+To try pinning, change the line to pin_cores=0-7,16-23 and compare. To turn it
+off, set pin_cores=no. Don't just delete the line: GameMode pins by default, so
+it would fall back to guessing the cores.
 
 
 3. MANGOHUD
@@ -225,7 +225,7 @@ Each setting is one file. Delete it with sudo rm and reboot to undo it.
   ~/.config/environment.d/90-nvidia-shader-cache.conf
       16 GB NVIDIA shader cache, up from the 1 GB default
   ~/.config/gamemode.ini
-      X3D switching ([custom]) and core pinning ([cpu])
+      X3D switching ([custom]) and core pinning, which is off ([cpu])
 
 Left at Fedora's defaults on purpose:
   - NVMe scheduler stays on "none". Bazzite and CachyOS use kyber, Nobara uses
@@ -272,13 +272,13 @@ off = optional and not installed
   OK       Loaded driver matches the installed packages
   OK       CUDA runtime
   OK       32-bit libraries
-  MISSING  Video acceleration (VA-API)
+  OK       Video acceleration (VA-API)
   OK       Flatpak GL runtime matches the driver
   OK       Flatpak 32-bit GL runtime matches the driver
 
  Codecs
-  MISSING  Full ffmpeg
-  MISSING  GStreamer plugins
+  OK       Full ffmpeg
+  OK       GStreamer plugins
 
  Dev tools
   OK       Compiler toolchain
@@ -288,45 +288,45 @@ off = optional and not installed
   OK       Claude Code
   OK       OpenCode
   OK       Codex CLI
-  MISSING  Distrobox
+  OK       Distrobox
 
  Gaming
   OK       Steam
-  MISSING  GameMode 64-bit
+  OK       GameMode 64-bit
   OK       GameMode 32-bit
   OK       MangoHud 64-bit + 32-bit
   OK       gamescope
-  MISSING  Lutris
-  MISSING  GOverlay
+  OK       Lutris
+  OK       GOverlay
   OK       Heroic
-  MISSING  MangoHud for Heroic
+  OK       MangoHud for Heroic
   OK       ProtonUp-Qt
-  MISSING  Protontricks
-  MISSING  GPU Screen Recorder
-  MISSING  dlss-swapper
+  OK       Protontricks
+  OK       GPU Screen Recorder
+  OK       dlss-swapper
   OK       ntsync
-  MISSING  16 GB shader cache
+  OK       16 GB shader cache
   OK       x3d-mode helper
   OK       x3d-mode runs without a password
   OK       X3D driver active (BIOS CPPC = Driver)
   OK       GameMode switches X3D mode
-  MISSING  GameMode pins games to the V-Cache cores
+  OK       GameMode leaves all cores available
 
  System tuning
-  MISSING  BBR congestion control
-  MISSING  File-watcher limit
-  MISSING  Earlier disk write flushing
-  MISSING  zram uses zstd
-  MISSING  Audio devices stay awake
-  MISSING  Wine audio crackle fix
+  OK       BBR congestion control
+  OK       File-watcher limit
+  OK       Earlier disk write flushing
+  OK       zram uses zstd
+  OK       Audio devices stay awake
+  OK       Wine audio crackle fix
 
  Snapshots
-  MISSING  snapper root config
-  MISSING  Snapshot before each dnf transaction
-  MISSING  Btrfs Assistant
+  OK       snapper root config
+  OK       Snapshot before each dnf transaction
+  OK       Btrfs Assistant
 
  Optional
   off      Sunshine game streaming (add with --sunshine)
   off      LACT GPU control (add with --lact)
 
- Summary: 29 OK, 22 missing, 0 waiting for a reboot
+ Summary: 51 OK, 0 missing, 0 waiting for a reboot

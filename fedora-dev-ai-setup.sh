@@ -205,7 +205,7 @@ report() {
     item "x3d-mode runs without a password" x3d_nopasswd
     item "X3D driver active (BIOS CPPC = Driver)" x3d_active
     item "GameMode switches X3D mode" in_file 'x3d-mode game' "$HOME/.config/gamemode.ini"
-    item "GameMode pins games to the V-Cache cores" in_file '^pin_cores=0-7,16-23' "$HOME/.config/gamemode.ini"
+    item "GameMode leaves all cores available" in_file '^pin_cores=no' "$HOME/.config/gamemode.ini"
   fi
 
   if $TUNING; then
@@ -283,7 +283,6 @@ Order matters: VARIABLES first, then tools, then %command% last.
 -------------------
 "gamemoderun" does the following while a game runs, then undoes it on exit:
   - switches the 9950X3D to cache mode (x3d-mode game)
-  - pins the game to the V-Cache cores (CPUs 0-7 and 16-23)
   - sets the CPU governor to performance
 
 Check that it works, while a game is running:
@@ -295,14 +294,15 @@ Manual control:
   x3d-mode game     cache mode, best for most games
   x3d-mode dev      frequency mode, best for compiling and general work
 
-Cache mode and pinning are two different things:
-  - Cache mode is a preference. The CPU favours the V-Cache cores, but game
-    threads can still land on the other, slower-cache cores.
-  - Pinning is a rule. The game can only run on the V-Cache cores.
+Cache mode is a preference. The CPU favours the V-Cache cores, but a busy game
+can still use the others. Core pinning is off, so games get all 32 threads.
+Helldivers 2 ran more stably that way: pinned to the 16 V-Cache threads, GPU
+usage kept dropping.
 
 Settings file: ~/.config/gamemode.ini
-A game that wants more than these 16 threads can lose out from pinning. To test
-that, remove the pin_cores line and compare.
+To try pinning, change the line to pin_cores=0-7,16-23 and compare. To turn it
+off, set pin_cores=no. Don't just delete the line: GameMode pins by default, so
+it would fall back to guessing the cores.
 
 
 3. MANGOHUD
@@ -463,7 +463,7 @@ Each setting is one file. Delete it with sudo rm and reboot to undo it.
   ~/.config/environment.d/90-nvidia-shader-cache.conf
       16 GB NVIDIA shader cache, up from the 1 GB default
   ~/.config/gamemode.ini
-      X3D switching ([custom]) and core pinning ([cpu])
+      X3D switching ([custom]) and core pinning, which is off ([cpu])
 
 Left at Fedora's defaults on purpose:
   - NVMe scheduler stays on "none". Bazzite and CachyOS use kyber, Nobara uses
@@ -934,14 +934,15 @@ EOF
     echo "  start=/usr/local/bin/x3d-mode game"
     echo "  end=/usr/local/bin/x3d-mode dev"
   fi
-  # GameMode 1.8 only auto-detects the 7900X3D/7950X3D, so name the V-Cache CCD
-  # outright: CPUs 0-7 and their SMT siblings 16-23 have the 96 MB L3.
+  # GameMode pins by default and only auto-detects the 7900X3D/7950X3D, so turn it
+  # off outright. Limited to the 16 V-Cache threads, Helldivers 2 kept dropping GPU
+  # usage. Cache mode still favours those cores. To try it: pin_cores=0-7,16-23
   if ! grep -q '^\[cpu\]' "$GM_INI"; then
     cat >> "$GM_INI" <<'EOF'
 
 [cpu]
 park_cores=no
-pin_cores=0-7,16-23
+pin_cores=no
 EOF
   fi
 fi
