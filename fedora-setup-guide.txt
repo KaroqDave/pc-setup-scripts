@@ -1,5 +1,5 @@
 FEDORA GAMING + DEV SETUP GUIDE
-Written by fedora-dev-ai-setup.sh on 2026-11-01 17:53
+Written by fedora-dev-ai-setup.sh on 2026-11-01 18:00
 Refresh this file:  bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --guide
 Check the system:   bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --check
 
@@ -12,7 +12,8 @@ CONTENTS
   6. Proton, ntsync and HDR    13. Anti-cheat
   7. Other game tools          14. System settings and how to undo them
                                15. Dev tools and Distrobox
-                               16. Current system state
+                               16. Controllers
+                               17. Current system state
 
 
 1. STEAM LAUNCH OPTIONS
@@ -215,6 +216,8 @@ Each setting is one file. Delete it with sudo rm and reboot to undo it.
       earlier disk write flushing
   /etc/systemd/zram-generator.conf
       16 GB zstd zram instead of Fedora's 8 GB lzo-rle
+  /etc/udev/rules.d/71-dualsense-touchpad.rules
+      stops the DualSense touchpad moving the mouse
   /etc/wireplumber/wireplumber.conf.d/51-disable-suspension.conf
       keeps audio devices awake. Delete this if you never hear pops or
       clipped sound when audio starts.
@@ -253,7 +256,27 @@ on Fedora. Nothing inside the box touches the host system.
 --nvidia passes your GPU through, including CUDA, for local AI tools.
 
 
-16. CURRENT SYSTEM STATE
+16. CONTROLLERS
+---------------
+Xbox Series X and PS5 DualSense both work over USB with drivers already in the
+kernel. The DualSense also works over Bluetooth the same way.
+
+Bluetooth is switched off on this PC. To use it:
+  rfkill unblock bluetooth
+Then pair in System Settings > Bluetooth:
+  DualSense: hold Create + PS until the light bar flashes.
+  Xbox: hold the small pair button on top until the Xbox logo flashes fast.
+
+Steam: check Settings > Controller. It shows connected controllers and has a
+test screen. Adaptive triggers and haptics depend on the game.
+
+The DualSense touchpad no longer moves your mouse. Games and Steam still see it.
+Bluetooth fast connect applies to the DualSense. The Xbox pad uses Bluetooth Low
+Energy, so it doesn't benefit. To undo it, remove FastConnectable from
+/etc/bluetooth/main.conf.
+
+
+17. CURRENT SYSTEM STATE
 ------------------------
 OK = working   MISSING = not set up   REBOOT = takes effect after a reboot
 off = optional and not installed
@@ -305,6 +328,8 @@ off = optional and not installed
   OK       GPU Screen Recorder
   OK       dlss-swapper
   OK       ntsync
+  MISSING  DualSense touchpad ignored on the desktop
+  MISSING  Bluetooth fast connect
   OK       16 GB shader cache
   OK       x3d-mode helper
   OK       x3d-mode runs without a password
@@ -329,4 +354,4 @@ off = optional and not installed
   off      Sunshine game streaming (add with --sunshine)
   off      LACT GPU control (add with --lact)
 
- Summary: 51 OK, 0 missing, 0 waiting for a reboot
+ Summary: 51 OK, 2 missing, 0 waiting for a reboot

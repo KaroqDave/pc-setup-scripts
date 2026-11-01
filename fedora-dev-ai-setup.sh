@@ -200,6 +200,8 @@ report() {
     item "GPU Screen Recorder" flatpak info com.dec05eba.gpu_screen_recorder
     item "dlss-swapper" have dlss-swapper
     item "ntsync" test -e /dev/ntsync
+    item "DualSense touchpad ignored on the desktop" test -e /etc/udev/rules.d/71-dualsense-touchpad.rules
+    item "Bluetooth fast connect" in_file '^FastConnectable = true' /etc/bluetooth/main.conf
     item "16 GB shader cache" in_file '=17179869184$' "$HOME/.config/environment.d/90-nvidia-shader-cache.conf"
     item "x3d-mode helper" have x3d-mode
     item "x3d-mode runs without a password" x3d_nopasswd
@@ -250,7 +252,8 @@ CONTENTS
   6. Proton, ntsync and HDR    13. Anti-cheat
   7. Other game tools          14. System settings and how to undo them
                                15. Dev tools and Distrobox
-                               16. Current system state
+                               16. Controllers
+                               17. Current system state
 
 
 1. STEAM LAUNCH OPTIONS
@@ -453,6 +456,8 @@ Each setting is one file. Delete it with sudo rm and reboot to undo it.
       earlier disk write flushing
   /etc/systemd/zram-generator.conf
       16 GB zstd zram instead of Fedora's 8 GB lzo-rle
+  /etc/udev/rules.d/71-dualsense-touchpad.rules
+      stops the DualSense touchpad moving the mouse
   /etc/wireplumber/wireplumber.conf.d/51-disable-suspension.conf
       keeps audio devices awake. Delete this if you never hear pops or
       clipped sound when audio starts.
@@ -491,7 +496,27 @@ on Fedora. Nothing inside the box touches the host system.
 --nvidia passes your GPU through, including CUDA, for local AI tools.
 
 
-16. CURRENT SYSTEM STATE
+16. CONTROLLERS
+---------------
+Xbox Series X and PS5 DualSense both work over USB with drivers already in the
+kernel. The DualSense also works over Bluetooth the same way.
+
+Bluetooth is switched off on this PC. To use it:
+  rfkill unblock bluetooth
+Then pair in System Settings > Bluetooth:
+  DualSense: hold Create + PS until the light bar flashes.
+  Xbox: hold the small pair button on top until the Xbox logo flashes fast.
+
+Steam: check Settings > Controller. It shows connected controllers and has a
+test screen. Adaptive triggers and haptics depend on the game.
+
+The DualSense touchpad no longer moves your mouse. Games and Steam still see it.
+Bluetooth fast connect applies to the DualSense. The Xbox pad uses Bluetooth Low
+Energy, so it doesn't benefit. To undo it, remove FastConnectable from
+/etc/bluetooth/main.conf.
+
+
+17. CURRENT SYSTEM STATE
 ------------------------
 OK = working   MISSING = not set up   REBOOT = takes effect after a reboot
 off = optional and not installed
@@ -726,6 +751,20 @@ if $GAMING; then
   cat > "$HOME/.config/environment.d/90-nvidia-shader-cache.conf" <<'EOF'
 __GL_SHADER_DISK_CACHE_SIZE=17179869184
 EOF
+
+  # Stop the DualSense touchpad moving the mouse. Games and Steam read the
+  # controller directly, so its touchpad still works for them.
+  if put_file /etc/udev/rules.d/71-dualsense-touchpad.rules <<'EOF'; then
+ACTION=="add|change", SUBSYSTEM=="input", ATTRS{name}=="*Wireless Controller Touchpad", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+EOF
+    sudo udevadm control --reload
+  fi
+
+  # Valve's Bluetooth setting, also in Bazzite: faster controller reconnects.
+  # Takes effect after a reboot.
+  if in_file '^#FastConnectable' /etc/bluetooth/main.conf; then
+    sudo sed -i 's/^#FastConnectable.*/FastConnectable = true/' /etc/bluetooth/main.conf
+  fi
 
   # Per-game wrapper for the newest DLSS. Use it as: dlss-swapper %command%
   put_file /usr/local/bin/dlss-swapper 0755 <<'EOF' || true
