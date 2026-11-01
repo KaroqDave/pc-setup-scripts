@@ -1,5 +1,5 @@
 FEDORA GAMING + DEV SETUP GUIDE
-Written by fedora-dev-ai-setup.sh on 2026-11-01 16:17
+Written by fedora-dev-ai-setup.sh on 2026-11-01 16:36
 Refresh this file:  bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --guide
 Check the system:   bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --check
 
@@ -211,24 +211,28 @@ this by itself, so expect EAC v2 games to refuse to run on this setup.
 Each setting is one file. Delete it with sudo rm and reboot to undo it.
 
   /etc/sysctl.d/90-gaming-dev.conf
-      BBR networking, MTU probing, file-watcher limit, max_map_count,
-      zram swap behaviour, earlier disk write flushing
-  /etc/modules-load.d/90-gaming-dev.conf
-      loads ntsync and BBR at boot
+      BBR networking, MTU probing, file-watcher limit, zram swap behaviour,
+      earlier disk write flushing
   /etc/systemd/zram-generator.conf
       16 GB zstd zram instead of Fedora's 8 GB lzo-rle
-  /etc/udev/rules.d/60-nvme-scheduler.rules
-      kyber on NVMe. Bazzite and CachyOS use this, Nobara stays on "none".
   /etc/wireplumber/wireplumber.conf.d/51-disable-suspension.conf
-      keeps audio devices awake
+      keeps audio devices awake. Delete this if you never hear pops or
+      clipped sound when audio starts.
   /etc/pipewire/pipewire-pulse.conf.d/wine_gaming.conf
       bigger Wine audio buffer, against crackling
   /etc/dnf/libdnf5-plugins/actions.d/snapper.actions
       the snapshot before each dnf transaction
   ~/.config/environment.d/90-nvidia-shader-cache.conf
-      10 GB NVIDIA shader cache
+      16 GB NVIDIA shader cache, up from the 1 GB default
   ~/.config/gamemode.ini
       X3D switching ([custom]) and core pinning ([cpu])
+
+Left at Fedora's defaults on purpose:
+  - NVMe scheduler stays on "none". Bazzite and CachyOS use kyber, Nobara uses
+    none, and there is no problem here for it to fix. To try kyber until the
+    next reboot:  echo kyber | sudo tee /sys/block/nvme0n1/queue/scheduler
+  - vm.max_map_count stays at 1048576. Only Star Citizen is known to want more:
+    if you play it, add vm.max_map_count = 16777216 to the sysctl file above.
 
 
 15. DEV TOOLS AND DISTROBOX
@@ -300,7 +304,8 @@ off = optional and not installed
   MISSING  Protontricks
   MISSING  GPU Screen Recorder
   MISSING  dlss-swapper
-  MISSING  10 GB shader cache
+  OK       ntsync
+  MISSING  16 GB shader cache
   OK       x3d-mode helper
   OK       x3d-mode runs without a password
   OK       X3D driver active (BIOS CPPC = Driver)
@@ -308,13 +313,10 @@ off = optional and not installed
   MISSING  GameMode pins games to the V-Cache cores
 
  System tuning
-  OK       ntsync
   MISSING  BBR congestion control
-  MISSING  vm.max_map_count
   MISSING  File-watcher limit
   MISSING  Earlier disk write flushing
   MISSING  zram uses zstd
-  MISSING  kyber on NVMe
   MISSING  Audio devices stay awake
   MISSING  Wine audio crackle fix
 
@@ -327,4 +329,4 @@ off = optional and not installed
   off      Sunshine game streaming (add with --sunshine)
   off      LACT GPU control (add with --lact)
 
- Summary: 29 OK, 24 missing, 0 waiting for a reboot
+ Summary: 29 OK, 22 missing, 0 waiting for a reboot

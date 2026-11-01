@@ -199,7 +199,8 @@ report() {
     item "Protontricks" flatpak info com.github.Matoking.protontricks
     item "GPU Screen Recorder" flatpak info com.dec05eba.gpu_screen_recorder
     item "dlss-swapper" have dlss-swapper
-    item "10 GB shader cache" test -e "$HOME/.config/environment.d/90-nvidia-shader-cache.conf"
+    item "ntsync" test -e /dev/ntsync
+    item "16 GB shader cache" in_file '=17179869184$' "$HOME/.config/environment.d/90-nvidia-shader-cache.conf"
     item "x3d-mode helper" have x3d-mode
     item "x3d-mode runs without a password" x3d_nopasswd
     item "X3D driver active (BIOS CPPC = Driver)" x3d_active
@@ -209,13 +210,10 @@ report() {
 
   if $TUNING; then
     group "System tuning"
-    live "ntsync" /etc/modules-load.d/90-gaming-dev.conf test -e /dev/ntsync
     live "BBR congestion control" /etc/sysctl.d/90-gaming-dev.conf sysctl_is net.ipv4.tcp_congestion_control bbr
-    live "vm.max_map_count" /etc/sysctl.d/90-gaming-dev.conf sysctl_is vm.max_map_count 16777216
     live "File-watcher limit" /etc/sysctl.d/90-gaming-dev.conf sysctl_is fs.inotify.max_user_instances 8192
     live "Earlier disk write flushing" /etc/sysctl.d/90-gaming-dev.conf sysctl_is vm.dirty_bytes 268435456
     live "zram uses zstd" /etc/systemd/zram-generator.conf in_file '\[zstd\]' /sys/block/zram0/comp_algorithm
-    live "kyber on NVMe" /etc/udev/rules.d/60-nvme-scheduler.rules in_file '\[kyber\]' /sys/block/nvme0n1/queue/scheduler
     item "Audio devices stay awake" test -e /etc/wireplumber/wireplumber.conf.d/51-disable-suspension.conf
     item "Wine audio crackle fix" test -e /etc/pipewire/pipewire-pulse.conf.d/wine_gaming.conf
   fi
@@ -451,24 +449,28 @@ this by itself, so expect EAC v2 games to refuse to run on this setup.
 Each setting is one file. Delete it with sudo rm and reboot to undo it.
 
   /etc/sysctl.d/90-gaming-dev.conf
-      BBR networking, MTU probing, file-watcher limit, max_map_count,
-      zram swap behaviour, earlier disk write flushing
-  /etc/modules-load.d/90-gaming-dev.conf
-      loads ntsync and BBR at boot
+      BBR networking, MTU probing, file-watcher limit, zram swap behaviour,
+      earlier disk write flushing
   /etc/systemd/zram-generator.conf
       16 GB zstd zram instead of Fedora's 8 GB lzo-rle
-  /etc/udev/rules.d/60-nvme-scheduler.rules
-      kyber on NVMe. Bazzite and CachyOS use this, Nobara stays on "none".
   /etc/wireplumber/wireplumber.conf.d/51-disable-suspension.conf
-      keeps audio devices awake
+      keeps audio devices awake. Delete this if you never hear pops or
+      clipped sound when audio starts.
   /etc/pipewire/pipewire-pulse.conf.d/wine_gaming.conf
       bigger Wine audio buffer, against crackling
   /etc/dnf/libdnf5-plugins/actions.d/snapper.actions
       the snapshot before each dnf transaction
   ~/.config/environment.d/90-nvidia-shader-cache.conf
-      10 GB NVIDIA shader cache
+      16 GB NVIDIA shader cache, up from the 1 GB default
   ~/.config/gamemode.ini
       X3D switching ([custom]) and core pinning ([cpu])
+
+Left at Fedora's defaults on purpose:
+  - NVMe scheduler stays on "none". Bazzite and CachyOS use kyber, Nobara uses
+    none, and there is no problem here for it to fix. To try kyber until the
+    next reboot:  echo kyber | sudo tee /sys/block/nvme0n1/queue/scheduler
+  - vm.max_map_count stays at 1048576. Only Star Citizen is known to want more:
+    if you play it, add vm.max_map_count = 16777216 to the sysctl file above.
 
 
 15. DEV TOOLS AND DISTROBOX
@@ -674,7 +676,7 @@ if $GAMING; then
     steam steam-devices \
     xorg-x11-drv-nvidia-libs.i686 \
     gamemode.x86_64 gamemode.i686 mangohud.x86_64 mangohud.i686 gamescope \
-    goverlay
+    goverlay ntsync-autoload
   # Same flag Bazzite uses: Lutris fetches its own runners, so skip the weak deps.
   if rpm -q lutris >/dev/null 2>&1; then
     skip "Lutris"
@@ -718,11 +720,11 @@ if $GAMING; then
     sudo usermod -aG gamemode "$USER"
   fi
 
-  # Larger NVIDIA shader cache, set for the whole session as NVIDIA's README
-  # advises: an app that sets it alone can make others wipe the cache.
+  # 16 GB NVIDIA shader cache for large libraries. Set for the whole session as
+  # NVIDIA's README advises: an app that sets it alone can make others wipe it.
   mkdir -p "$HOME/.config/environment.d"
   cat > "$HOME/.config/environment.d/90-nvidia-shader-cache.conf" <<'EOF'
-__GL_SHADER_DISK_CACHE_SIZE=10737418240
+__GL_SHADER_DISK_CACHE_SIZE=17179869184
 EOF
 
   # Per-game wrapper for the newest DLSS. Use it as: dlss-swapper %command%
@@ -770,18 +772,10 @@ if $LACT; then
 fi
 
 # 10. System tuning (optional) ---------------------------------------------
-# Only settings that do something on this hardware. Each one is a single file,
-# so deleting the file undoes it (the guide lists them all).
+# Only settings that still change something on Fedora 44 / kernel 7.2 and this
+# hardware. Each one is a single file, so deleting it undoes it (see the guide).
 if $TUNING; then
   step "Applying Bazzite/CachyOS/Nobara system tuning"
-
-  if put_file /etc/modules-load.d/90-gaming-dev.conf <<'EOF'; then
-# Wine/Proton fast synchronisation, and the BBR module for the sysctl file
-ntsync
-tcp_bbr
-EOF
-    sudo modprobe -a ntsync tcp_bbr
-  fi
 
   if put_file /etc/sysctl.d/90-gaming-dev.conf <<'EOF'; then
 # Bazzite: BBR congestion control. Bazzite + Nobara: recover from broken-MTU paths
@@ -789,11 +783,8 @@ net.ipv4.tcp_congestion_control = bbr
 net.ipv4.tcp_mtu_probing = 1
 # Bazzite: file-watcher limit (Fedora's 128 is easy to hit with VS Code + Node)
 fs.inotify.max_user_instances = 8192
-# Nobara: memory-map limit needed by the heaviest games (Star Citizen)
-vm.max_map_count = 16777216
-# CachyOS: swap is RAM-backed zram here, so use it freely, one page at a time
+# CachyOS: swap is RAM-backed zram here, so use it freely
 vm.swappiness = 100
-vm.page-cluster = 0
 # CachyOS: flush writes early. Percent defaults allow ~12 GB of dirty pages on
 # this machine, which can stall everything when it all hits the disk at once.
 vm.dirty_bytes = 268435456
@@ -808,15 +799,6 @@ EOF
 compression-algorithm = zstd
 zram-size = min(ram / 2, 16384)
 EOF
-
-  # Bazzite + CachyOS: kyber keeps reads responsive during heavy writes on NVMe.
-  # Nobara stays on "none" (Fedora's default); delete this rule to do the same.
-  if put_file /etc/udev/rules.d/60-nvme-scheduler.rules <<'EOF'; then
-ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="kyber"
-EOF
-    sudo udevadm control --reload
-    sudo udevadm trigger --subsystem-match=block --action=change
-  fi
 
   # Bazzite: keep audio devices awake, avoiding pops and clipped sound on start.
   put_file /etc/wireplumber/wireplumber.conf.d/51-disable-suspension.conf <<'EOF' || true
