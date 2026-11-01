@@ -10,6 +10,7 @@
 #   --check         show what is installed/active and change nothing (no sudo needed)
 #   --guide         only write the instructions file (no sudo needed)
 #   --no-update     skip the full "dnf upgrade" at the start
+#   --no-dev        skip dev tools, Rust, VS Code, Cursor and the AI coding CLIs
 #   --no-gaming     skip gaming packages and the GameMode/shader/DLSS setup
 #   --no-tuning     skip sysctl, zram, I/O scheduler and audio tuning
 #   --no-snapshots  skip snapper and the pre-dnf snapshots
@@ -24,6 +25,7 @@ fi
 
 MODE=apply
 UPDATE=true
+DEV=true
 GAMING=true
 TUNING=true
 SNAPSHOTS=true
@@ -34,6 +36,7 @@ for arg in "$@"; do
     --check)        MODE=check ;;
     --guide)        MODE=guide ;;
     --no-update)    UPDATE=false ;;
+    --no-dev)       DEV=false ;;
     --no-gaming)    GAMING=false ;;
     --no-tuning)    TUNING=false ;;
     --no-snapshots) SNAPSHOTS=false ;;
@@ -169,14 +172,17 @@ report() {
   item "Full ffmpeg" rpm -q ffmpeg
   item "GStreamer plugins" rpm -q gstreamer1-plugin-libav gstreamer1-plugins-bad-freeworld
 
-  group "Dev tools"
-  item "Compiler toolchain" rpm -q gcc make cmake clang
-  item "Rust (rustup)" have rustup
-  item "VS Code" have code
-  item "Claude Code" have claude
-  item "OpenCode" have opencode
-  item "Codex CLI" have codex
-  item "Distrobox" have distrobox
+  if $DEV; then
+    group "Dev tools"
+    item "Compiler toolchain" rpm -q gcc make cmake clang
+    item "Rust (rustup)" have rustup
+    item "VS Code" have code
+    item "Cursor" have cursor
+    item "Claude Code" have claude
+    item "OpenCode" have opencode
+    item "Codex CLI" have codex
+    item "Distrobox" have distrobox
+  fi
 
   if $GAMING; then
     group "Gaming"
@@ -245,7 +251,8 @@ CONTENTS
   5. DLSS swapper              12. NVIDIA driver updates
   6. Proton, ntsync and HDR    13. Anti-cheat
   7. Other game tools          14. System settings and how to undo them
-                               15. Current system state
+                               15. Dev tools and Distrobox
+                               16. Current system state
 
 
 1. STEAM LAUNCH OPTIONS
@@ -289,6 +296,11 @@ Manual control:
   x3d-mode          show the current mode
   x3d-mode game     cache mode, best for most games
   x3d-mode dev      frequency mode, best for compiling and general work
+
+Cache mode and pinning are two different things:
+  - Cache mode is a preference. The CPU favours the V-Cache cores, but game
+    threads can still land on the other, slower-cache cores.
+  - Pinning is a rule. The game can only run on the V-Cache cores.
 
 Settings file: ~/.config/gamemode.ini
 A game that wants more than these 16 threads can lose out from pinning. To test
@@ -459,7 +471,25 @@ Each setting is one file. Delete it with sudo rm and reboot to undo it.
       X3D switching ([custom]) and core pinning ([cpu])
 
 
-15. CURRENT SYSTEM STATE
+15. DEV TOOLS AND DISTROBOX
+---------------------------
+Skip all of this with --no-dev. It covers the compilers, Rust, VS Code, Cursor,
+Claude Code, OpenCode, Codex CLI and Distrobox.
+
+Distrobox runs another Linux distro in a container that feels like part of your
+desktop. It shares your home folder, GUI, audio and USB devices, so it is useful
+when a tool only supports Ubuntu or Arch, or needs libraries that you don't want
+on Fedora. Nothing inside the box touches the host system.
+
+  distrobox create --nvidia --image ubuntu:24.04 --name ubuntu
+  distrobox enter ubuntu       work inside it, with apt and your own files
+  distrobox list               show your boxes
+  distrobox rm ubuntu          delete the box (your home folder files stay)
+
+--nvidia passes your GPU through, including CUDA, for local AI tools.
+
+
+16. CURRENT SYSTEM STATE
 ------------------------
 OK = working   MISSING = not set up   REBOOT = takes effect after a reboot
 off = optional and not installed
@@ -545,43 +575,44 @@ fi
 need_pkgs ffmpeg gstreamer1-plugin-libav gstreamer1-plugins-bad-freeworld \
   libva-nvidia-driver.x86_64 libva-nvidia-driver.i686 libva-utils vdpauinfo
 
-# 5. Dev tools -------------------------------------------------------------
-step "Installing dev tools"
-# rpm, not "dnf group list": dnf can stop to ask a question, which would be
-# invisible here and freeze the script.
-if rpm -q make gcc patch >/dev/null 2>&1; then
-  skip "development-tools group"
-else
-  sudo dnf group install -y development-tools
-fi
-need_pkgs \
-  git git-lfs gcc-c++ clang clang-tools-extra cmake ninja-build gdb \
-  python3 python3-pip python3-devel nodejs npm \
-  jq ripgrep fd-find htop curl wget unzip \
-  distrobox btop fastfetch compsize lm_sensors p7zip
-git lfs install >/dev/null
+if $DEV; then
+  # 5. Dev tools -------------------------------------------------------------
+  step "Installing dev tools"
+  # rpm, not "dnf group list": dnf can stop to ask a question, which would be
+  # invisible here and freeze the script.
+  if rpm -q make gcc patch >/dev/null 2>&1; then
+    skip "development-tools group"
+  else
+    sudo dnf group install -y development-tools
+  fi
+  need_pkgs \
+    git git-lfs gcc-c++ clang clang-tools-extra cmake ninja-build gdb \
+    python3 python3-pip python3-devel nodejs npm \
+    jq ripgrep fd-find htop curl wget unzip \
+    distrobox btop fastfetch compsize lm_sensors p7zip
+  git lfs install >/dev/null
 
-# Rust (official rustup: stable toolchain + editor/lint tools)
-step "Installing Rust"
-if have rustup; then
-  skip "rustup"
-else
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-fi
-# shellcheck disable=SC1091
-source "$HOME/.cargo/env"
-RUST_HAVE="$(rustup component list --installed)"
-for c in rust-analyzer clippy rustfmt; do
-  [[ "$RUST_HAVE" == *"$c"* ]] || rustup component add "$c"
-done
+  # Rust (official rustup: stable toolchain + editor/lint tools)
+  step "Installing Rust"
+  if have rustup; then
+    skip "rustup"
+  else
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+  fi
+  # shellcheck disable=SC1091
+  source "$HOME/.cargo/env"
+  RUST_HAVE="$(rustup component list --installed)"
+  for c in rust-analyzer clippy rustfmt; do
+    [[ "$RUST_HAVE" == *"$c"* ]] || rustup component add "$c"
+  done
 
-# 6. VS Code (Microsoft repo) ---------------------------------------------
-step "Installing VS Code"
-if rpm -q code >/dev/null 2>&1; then
-  skip "VS Code"
-else
-  sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
-  sudo tee /etc/yum.repos.d/vscode.repo >/dev/null <<'EOF'
+  # 6. VS Code (Microsoft repo) ---------------------------------------------
+  step "Installing VS Code"
+  if rpm -q code >/dev/null 2>&1; then
+    skip "VS Code"
+  else
+    sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
+    sudo tee /etc/yum.repos.d/vscode.repo >/dev/null <<'EOF'
 [code]
 name=Visual Studio Code
 baseurl=https://packages.microsoft.com/yumrepos/vscode
@@ -591,31 +622,49 @@ type=rpm-md
 gpgcheck=1
 gpgkey=https://packages.microsoft.com/keys/microsoft.asc
 EOF
-  sudo dnf install -y code
-fi
+    sudo dnf install -y code
+  fi
 
-# 7. Claude Code (native installer, auto-updates) --------------------------
-if have claude; then
-  skip "Claude Code"
-else
-  step "Installing Claude Code"
-  curl -fsSL https://claude.ai/install.sh | bash
-fi
+  # 6b. Cursor (official repo, same file the Cursor RPM writes) ---------------
+  step "Installing Cursor"
+  if rpm -q cursor >/dev/null 2>&1; then
+    skip "Cursor"
+  else
+    sudo tee /etc/yum.repos.d/cursor.repo >/dev/null <<'EOF'
+[cursor]
+name=Cursor
+baseurl=https://downloads.cursor.com/yumrepo
+enabled=1
+gpgcheck=1
+gpgkey=https://downloads.cursor.com/keys/anysphere.asc
+repo_gpgcheck=1
+EOF
+    sudo dnf install -y cursor || echo "NOTE: Cursor didn't install; get it from https://cursor.com instead."
+  fi
 
-# 8. OpenCode --------------------------------------------------------------
-if have opencode; then
-  skip "OpenCode"
-else
-  step "Installing OpenCode"
-  curl -fsSL https://opencode.ai/install | bash
-fi
+  # 7. Claude Code (native installer, auto-updates) --------------------------
+  if have claude; then
+    skip "Claude Code"
+  else
+    step "Installing Claude Code"
+    curl -fsSL https://claude.ai/install.sh | bash
+  fi
 
-# 8b. Codex CLI (OpenAI, terminal) -----------------------------------------
-if have codex; then
-  skip "Codex CLI"
-else
-  step "Installing Codex CLI"
-  curl -fsSL https://chatgpt.com/codex/install.sh | sh
+  # 8. OpenCode --------------------------------------------------------------
+  if have opencode; then
+    skip "OpenCode"
+  else
+    step "Installing OpenCode"
+    curl -fsSL https://opencode.ai/install | bash
+  fi
+
+  # 8b. Codex CLI (OpenAI, terminal) -----------------------------------------
+  if have codex; then
+    skip "Codex CLI"
+  else
+    step "Installing Codex CLI"
+    curl -fsSL https://chatgpt.com/codex/install.sh | sh
+  fi
 fi
 
 # 9. Gaming (optional) -----------------------------------------------------
@@ -916,7 +965,7 @@ EOF
 fi
 
 # Make sure ~/.local/bin is on PATH for claude
-if ! grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null; then
+if $DEV && ! grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null; then
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
 fi
 

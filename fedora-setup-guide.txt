@@ -1,5 +1,5 @@
 FEDORA GAMING + DEV SETUP GUIDE
-Written by fedora-dev-ai-setup.sh on 2026-11-01 16:05
+Written by fedora-dev-ai-setup.sh on 2026-11-01 16:17
 Refresh this file:  bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --guide
 Check the system:   bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --check
 
@@ -11,7 +11,8 @@ CONTENTS
   5. DLSS swapper              12. NVIDIA driver updates
   6. Proton, ntsync and HDR    13. Anti-cheat
   7. Other game tools          14. System settings and how to undo them
-                               15. Current system state
+                               15. Dev tools and Distrobox
+                               16. Current system state
 
 
 1. STEAM LAUNCH OPTIONS
@@ -55,6 +56,11 @@ Manual control:
   x3d-mode          show the current mode
   x3d-mode game     cache mode, best for most games
   x3d-mode dev      frequency mode, best for compiling and general work
+
+Cache mode and pinning are two different things:
+  - Cache mode is a preference. The CPU favours the V-Cache cores, but game
+    threads can still land on the other, slower-cache cores.
+  - Pinning is a rule. The game can only run on the V-Cache cores.
 
 Settings file: ~/.config/gamemode.ini
 A game that wants more than these 16 threads can lose out from pinning. To test
@@ -225,7 +231,25 @@ Each setting is one file. Delete it with sudo rm and reboot to undo it.
       X3D switching ([custom]) and core pinning ([cpu])
 
 
-15. CURRENT SYSTEM STATE
+15. DEV TOOLS AND DISTROBOX
+---------------------------
+Skip all of this with --no-dev. It covers the compilers, Rust, VS Code, Cursor,
+Claude Code, OpenCode, Codex CLI and Distrobox.
+
+Distrobox runs another Linux distro in a container that feels like part of your
+desktop. It shares your home folder, GUI, audio and USB devices, so it is useful
+when a tool only supports Ubuntu or Arch, or needs libraries that you don't want
+on Fedora. Nothing inside the box touches the host system.
+
+  distrobox create --nvidia --image ubuntu:24.04 --name ubuntu
+  distrobox enter ubuntu       work inside it, with apt and your own files
+  distrobox list               show your boxes
+  distrobox rm ubuntu          delete the box (your home folder files stay)
+
+--nvidia passes your GPU through, including CUDA, for local AI tools.
+
+
+16. CURRENT SYSTEM STATE
 ------------------------
 OK = working   MISSING = not set up   REBOOT = takes effect after a reboot
 off = optional and not installed
@@ -256,6 +280,7 @@ off = optional and not installed
   OK       Compiler toolchain
   OK       Rust (rustup)
   OK       VS Code
+  OK       Cursor
   OK       Claude Code
   OK       OpenCode
   OK       Codex CLI
@@ -302,4 +327,4 @@ off = optional and not installed
   off      Sunshine game streaming (add with --sunshine)
   off      LACT GPU control (add with --lact)
 
- Summary: 28 OK, 24 missing, 0 waiting for a reboot
+ Summary: 29 OK, 24 missing, 0 waiting for a reboot
