@@ -1,5 +1,5 @@
 FEDORA GAMING + DEV SETUP GUIDE
-Written by fedora-dev-ai-setup.sh on 2026-11-01 18:00
+Written by fedora-dev-ai-setup.sh on 2026-11-01 19:44
 Refresh this file:  bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --guide
 Check the system:   bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --check
 
@@ -7,8 +7,8 @@ CONTENTS
   1. Steam launch options       8. GPU Screen Recorder
   2. GameMode and X3D           9. LACT (optional)
   3. MangoHud                  10. Sunshine (optional)
-  4. GOverlay                  11. Snapshots
-  5. DLSS swapper              12. NVIDIA driver updates
+  4. GOverlay                  11. Snapshots and disk checks
+  5. DLSS and Smooth Motion    12. NVIDIA driver updates
   6. Proton, ntsync and HDR    13. Anti-cheat
   7. Other game tools          14. System settings and how to undo them
                                15. Dev tools and Distrobox
@@ -85,6 +85,11 @@ Config, highest priority first:
 All options with explanations: /usr/share/doc/mangohud/MangoHud.conf.example
 GOverlay (next section) edits all of this with a GUI.
 
+The script writes MangoHud.conf once. It shows FPS, average and 1% low FPS, a
+frametime graph, CPU and GPU load and temperature, GPU power, VRAM, RAM and
+whether GameMode is on. After that the file is yours: re-running the script
+keeps your edits. To get the original back, delete it and run the script again.
+
 
 4. GOVERLAY
 -----------
@@ -99,8 +104,8 @@ A GUI for MangoHud, vkBasalt (sharpening and other effects) and OptiScaler
     with anti-cheat.
 
 
-5. DLSS SWAPPER
----------------
+5. DLSS AND SMOOTH MOTION
+-------------------------
 "dlss-swapper" is a small wrapper you add per game. It does two things:
   - PROTON_DLSS_UPGRADE=1 makes GE-Proton and Proton-CachyOS download newer DLSS
     files. Other Proton builds, including Proton Experimental, ignore this.
@@ -115,6 +120,17 @@ How to use it:
 
 Try it on single-player games first. It changes DLSS files, and how anti-cheat
 reacts to that varies by game.
+
+NVIDIA Smooth Motion is frame generation built into the driver, for games without
+DLSS Frame Generation. It adds one generated frame between each pair of rendered
+frames. That looks smoother, but it doesn't make the game respond faster. It
+works with Vulkan, which covers most Windows games running through Proton.
+
+Launch options, per game:
+  NVPRESENT_ENABLE_SMOOTH_MOTION=1 gamemoderun mangohud %command%
+
+Overlays can clash with it. If MangoHud misbehaves, add NVPRESENT_QUEUE_FAMILY=1
+in front as well, which costs some performance.
 
 
 6. PROTON, NTSYNC AND HDR
@@ -166,11 +182,12 @@ is the simplest way to cut heat and noise. Changes need the background service:
 Streams your desktop and games to Moonlight on another device.
   1. Open https://localhost:47990 straight away and create the admin login.
   2. In Moonlight, add this PC and enter the PIN into the web page.
-Your Fedora firewall zone already allows the ports on your network.
+The script opens the streaming ports in the firewall. The admin page stays
+available only on this PC.
 
 
-11. SNAPSHOTS
--------------
+11. SNAPSHOTS AND DISK CHECKS
+-----------------------------
 A snapshot of the system (not /home) is taken before every dnf transaction, and
 the last 10 are kept.
 
@@ -181,6 +198,17 @@ the last 10 are kept.
 Btrfs Assistant does the same with a GUI. These undo file changes, but you can't
 boot into a snapshot, and /boot isn't included, so kernels aren't covered. They
 do not replace a backup.
+
+Once a month, every Btrfs drive is read and compared with its checksums (a
+"scrub"). This runs on the 1st, or at the next boot if the PC was off. It only
+reads data in use, so it usually takes minutes. Your data is stored as one copy,
+so a scrub finds corruption but can't repair it: restore that file from a backup.
+
+Nothing pops up if it finds a problem, so look at the results now and then:
+  sudo btrfs scrub status /
+  sudo btrfs scrub status /data        "no errors found" is what you want
+
+Run one now:  sudo systemctl start btrfs-scrub.service
 
 
 12. NVIDIA DRIVER UPDATES
@@ -225,10 +253,38 @@ Each setting is one file. Delete it with sudo rm and reboot to undo it.
       bigger Wine audio buffer, against crackling
   /etc/dnf/libdnf5-plugins/actions.d/snapper.actions
       the snapshot before each dnf transaction
+  /etc/dnf/libdnf5.conf.d/90-parallel-downloads.conf
+      10 downloads at once, up from dnf's default of 3
   ~/.config/environment.d/90-nvidia-shader-cache.conf
       16 GB NVIDIA shader cache, up from the 1 GB default
   ~/.config/gamemode.ini
       X3D switching ([custom]) and core pinning, which is off ([cpu])
+  ~/.config/MangoHud/MangoHud.conf
+      what the MangoHud overlay shows
+  ~/.config/autostart/imsettings-start.desktop
+  ~/.config/autostart/nvidia-settings-user.desktop
+      hide two autostarts that fail at every login on Plasma Wayland
+
+These are undone with a command instead:
+  Firewall (see below):
+      sudo rm /etc/firewalld/zones/FedoraWorkstation.xml
+      sudo firewall-cmd --reload
+  Monthly disk check:
+      sudo systemctl disable --now btrfs-scrub.timer
+  nvidia-powerd, a laptop feature that stops at every boot on this PC:
+      sudo systemctl enable nvidia-powerd
+
+Firewall: Fedora's desktop zone allows every port from 1025 upwards. The script
+closes that range and keeps KDE Connect, local device discovery (mDNS), and
+Steam's local streaming and game transfers. Connections you start, such as
+joining an online game, aren't affected, and neither is anything you open on
+this PC.
+
+Other devices can no longer reach a server on this PC, so open the port if you
+need that, for example a dev server or a game you host:
+  sudo firewall-cmd --permanent --add-port=3000/tcp
+  sudo firewall-cmd --reload
+If a game has trouble hosting or with voice chat, open the ports it lists.
 
 Left at Fedora's defaults on purpose:
   - NVMe scheduler stays on "none". Bazzite and CachyOS use kyber, Nobara uses
@@ -318,6 +374,7 @@ off = optional and not installed
   OK       GameMode 64-bit
   OK       GameMode 32-bit
   OK       MangoHud 64-bit + 32-bit
+  MISSING  MangoHud overlay config
   OK       gamescope
   OK       Lutris
   OK       GOverlay
@@ -328,8 +385,8 @@ off = optional and not installed
   OK       GPU Screen Recorder
   OK       dlss-swapper
   OK       ntsync
-  MISSING  DualSense touchpad ignored on the desktop
-  MISSING  Bluetooth fast connect
+  OK       DualSense touchpad ignored on the desktop
+  OK       Bluetooth fast connect
   OK       16 GB shader cache
   OK       x3d-mode helper
   OK       x3d-mode runs without a password
@@ -344,6 +401,11 @@ off = optional and not installed
   OK       zram uses zstd
   OK       Audio devices stay awake
   OK       Wine audio crackle fix
+  MISSING  Monthly Btrfs check of every drive
+  MISSING  Firewall opens only the ports in use
+  MISSING  10 parallel dnf downloads
+  MISSING  Laptop-only nvidia-powerd turned off
+  MISSING  Failing login autostarts turned off
 
  Snapshots
   OK       snapper root config
@@ -354,4 +416,4 @@ off = optional and not installed
   off      Sunshine game streaming (add with --sunshine)
   off      LACT GPU control (add with --lact)
 
- Summary: 51 OK, 2 missing, 0 waiting for a reboot
+ Summary: 53 OK, 6 missing, 0 waiting for a reboot

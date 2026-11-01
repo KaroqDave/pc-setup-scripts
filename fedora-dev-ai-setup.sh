@@ -12,7 +12,7 @@
 #   --no-update     skip the full "dnf upgrade" at the start
 #   --no-dev        skip dev tools, Rust, VS Code, Cursor and the AI coding CLIs
 #   --no-gaming     skip gaming packages and the GameMode/shader/DLSS setup
-#   --no-tuning     skip sysctl, zram, I/O scheduler and audio tuning
+#   --no-tuning     skip sysctl, zram, audio, firewall, disk check and cleanup steps
 #   --no-snapshots  skip snapper and the pre-dnf snapshots
 #   --sunshine      also install Sunshine (stream games to Moonlight clients)
 #   --lact          also install LACT (GPU fan curves, power limit, clocks)
@@ -119,6 +119,17 @@ x3d_nopasswd()     { sudo -n -l /usr/local/libexec/x3d-mode-set cache; }
 sysctl_is()        { [[ "$(sysctl -n "$1" 2>/dev/null)" == "$2" ]]; }
 in_file()          { grep -q "$1" "$2" 2>/dev/null; }
 hud_layer()        { local rt; rt="$(flatpak info --show-runtime com.heroicgameslauncher.hgl 2>/dev/null)"; printf '%s' "${rt##*/}"; }
+firewall_up()      { [[ "$(firewall-cmd --state 2>/dev/null)" == running ]]; }
+firewall_tight()   { firewall_up && ! firewall-cmd -q --query-port=1025-65535/tcp && ! firewall-cmd -q --query-port=1025-65535/udp; }
+scrub_on()         { systemctl -q is-enabled btrfs-scrub.timer && in_file '^BTRFS_SCRUB_MOUNTPOINTS="auto"' /etc/sysconfig/btrfsmaintenance; }
+powerd_off()       { ! systemctl -q is-enabled nvidia-powerd; }
+# True when each named login autostart is absent or hidden by a user override.
+autostart_off() {
+  local n
+  for n in "$@"; do
+    [[ ! -e "/etc/xdg/autostart/$n.desktop" ]] || in_file '^Hidden=true' "$HOME/.config/autostart/$n.desktop" || return 1
+  done
+}
 
 # Status report -----------------------------------------------------------
 N_OK=0 N_MISSING=0 N_REBOOT=0
@@ -190,6 +201,7 @@ report() {
     item "GameMode 64-bit" rpm -q gamemode.x86_64
     item "GameMode 32-bit" rpm -q gamemode.i686
     item "MangoHud 64-bit + 32-bit" rpm -q mangohud.x86_64 mangohud.i686
+    item "MangoHud overlay config" test -e "$HOME/.config/MangoHud/MangoHud.conf"
     item "gamescope" rpm -q gamescope
     item "Lutris" rpm -q lutris
     item "GOverlay" rpm -q goverlay
@@ -218,6 +230,11 @@ report() {
     live "zram uses zstd" /etc/systemd/zram-generator.conf in_file '\[zstd\]' /sys/block/zram0/comp_algorithm
     item "Audio devices stay awake" test -e /etc/wireplumber/wireplumber.conf.d/51-disable-suspension.conf
     item "Wine audio crackle fix" test -e /etc/pipewire/pipewire-pulse.conf.d/wine_gaming.conf
+    item "Monthly Btrfs check of every drive" scrub_on
+    item "Firewall opens only the ports in use" firewall_tight
+    item "10 parallel dnf downloads" test -e /etc/dnf/libdnf5.conf.d/90-parallel-downloads.conf
+    item "Laptop-only nvidia-powerd turned off" powerd_off
+    item "Failing login autostarts turned off" autostart_off imsettings-start nvidia-settings-user
   fi
 
   if $SNAPSHOTS; then
@@ -247,8 +264,8 @@ CONTENTS
   1. Steam launch options       8. GPU Screen Recorder
   2. GameMode and X3D           9. LACT (optional)
   3. MangoHud                  10. Sunshine (optional)
-  4. GOverlay                  11. Snapshots
-  5. DLSS swapper              12. NVIDIA driver updates
+  4. GOverlay                  11. Snapshots and disk checks
+  5. DLSS and Smooth Motion    12. NVIDIA driver updates
   6. Proton, ntsync and HDR    13. Anti-cheat
   7. Other game tools          14. System settings and how to undo them
                                15. Dev tools and Distrobox
@@ -325,6 +342,11 @@ Config, highest priority first:
 All options with explanations: /usr/share/doc/mangohud/MangoHud.conf.example
 GOverlay (next section) edits all of this with a GUI.
 
+The script writes MangoHud.conf once. It shows FPS, average and 1% low FPS, a
+frametime graph, CPU and GPU load and temperature, GPU power, VRAM, RAM and
+whether GameMode is on. After that the file is yours: re-running the script
+keeps your edits. To get the original back, delete it and run the script again.
+
 
 4. GOVERLAY
 -----------
@@ -339,8 +361,8 @@ A GUI for MangoHud, vkBasalt (sharpening and other effects) and OptiScaler
     with anti-cheat.
 
 
-5. DLSS SWAPPER
----------------
+5. DLSS AND SMOOTH MOTION
+-------------------------
 "dlss-swapper" is a small wrapper you add per game. It does two things:
   - PROTON_DLSS_UPGRADE=1 makes GE-Proton and Proton-CachyOS download newer DLSS
     files. Other Proton builds, including Proton Experimental, ignore this.
@@ -355,6 +377,17 @@ How to use it:
 
 Try it on single-player games first. It changes DLSS files, and how anti-cheat
 reacts to that varies by game.
+
+NVIDIA Smooth Motion is frame generation built into the driver, for games without
+DLSS Frame Generation. It adds one generated frame between each pair of rendered
+frames. That looks smoother, but it doesn't make the game respond faster. It
+works with Vulkan, which covers most Windows games running through Proton.
+
+Launch options, per game:
+  NVPRESENT_ENABLE_SMOOTH_MOTION=1 gamemoderun mangohud %command%
+
+Overlays can clash with it. If MangoHud misbehaves, add NVPRESENT_QUEUE_FAMILY=1
+in front as well, which costs some performance.
 
 
 6. PROTON, NTSYNC AND HDR
@@ -406,11 +439,12 @@ is the simplest way to cut heat and noise. Changes need the background service:
 Streams your desktop and games to Moonlight on another device.
   1. Open https://localhost:47990 straight away and create the admin login.
   2. In Moonlight, add this PC and enter the PIN into the web page.
-Your Fedora firewall zone already allows the ports on your network.
+The script opens the streaming ports in the firewall. The admin page stays
+available only on this PC.
 
 
-11. SNAPSHOTS
--------------
+11. SNAPSHOTS AND DISK CHECKS
+-----------------------------
 A snapshot of the system (not /home) is taken before every dnf transaction, and
 the last 10 are kept.
 
@@ -421,6 +455,17 @@ the last 10 are kept.
 Btrfs Assistant does the same with a GUI. These undo file changes, but you can't
 boot into a snapshot, and /boot isn't included, so kernels aren't covered. They
 do not replace a backup.
+
+Once a month, every Btrfs drive is read and compared with its checksums (a
+"scrub"). This runs on the 1st, or at the next boot if the PC was off. It only
+reads data in use, so it usually takes minutes. Your data is stored as one copy,
+so a scrub finds corruption but can't repair it: restore that file from a backup.
+
+Nothing pops up if it finds a problem, so look at the results now and then:
+  sudo btrfs scrub status /
+  sudo btrfs scrub status /data        "no errors found" is what you want
+
+Run one now:  sudo systemctl start btrfs-scrub.service
 
 
 12. NVIDIA DRIVER UPDATES
@@ -465,10 +510,38 @@ Each setting is one file. Delete it with sudo rm and reboot to undo it.
       bigger Wine audio buffer, against crackling
   /etc/dnf/libdnf5-plugins/actions.d/snapper.actions
       the snapshot before each dnf transaction
+  /etc/dnf/libdnf5.conf.d/90-parallel-downloads.conf
+      10 downloads at once, up from dnf's default of 3
   ~/.config/environment.d/90-nvidia-shader-cache.conf
       16 GB NVIDIA shader cache, up from the 1 GB default
   ~/.config/gamemode.ini
       X3D switching ([custom]) and core pinning, which is off ([cpu])
+  ~/.config/MangoHud/MangoHud.conf
+      what the MangoHud overlay shows
+  ~/.config/autostart/imsettings-start.desktop
+  ~/.config/autostart/nvidia-settings-user.desktop
+      hide two autostarts that fail at every login on Plasma Wayland
+
+These are undone with a command instead:
+  Firewall (see below):
+      sudo rm /etc/firewalld/zones/FedoraWorkstation.xml
+      sudo firewall-cmd --reload
+  Monthly disk check:
+      sudo systemctl disable --now btrfs-scrub.timer
+  nvidia-powerd, a laptop feature that stops at every boot on this PC:
+      sudo systemctl enable nvidia-powerd
+
+Firewall: Fedora's desktop zone allows every port from 1025 upwards. The script
+closes that range and keeps KDE Connect, local device discovery (mDNS), and
+Steam's local streaming and game transfers. Connections you start, such as
+joining an online game, aren't affected, and neither is anything you open on
+this PC.
+
+Other devices can no longer reach a server on this PC, so open the port if you
+need that, for example a dev server or a game you host:
+  sudo firewall-cmd --permanent --add-port=3000/tcp
+  sudo firewall-cmd --reload
+If a game has trouble hosting or with voice chat, open the ports it lists.
 
 Left at Fedora's defaults on purpose:
   - NVMe scheduler stays on "none". Bazzite and CachyOS use kyber, Nobara uses
@@ -752,6 +825,30 @@ if $GAMING; then
 __GL_SHADER_DISK_CACHE_SIZE=17179869184
 EOF
 
+  # MangoHud's defaults leave out 1% lows and temperatures. Written only once,
+  # because GOverlay and the user edit this file.
+  if [[ -e "$HOME/.config/MangoHud/MangoHud.conf" ]]; then
+    skip "MangoHud config"
+  else
+    mkdir -p "$HOME/.config/MangoHud"
+    cat > "$HOME/.config/MangoHud/MangoHud.conf" <<'EOF'
+# Written once by fedora-dev-ai-setup.sh. Edit freely, or use GOverlay.
+# All options: /usr/share/doc/mangohud/MangoHud.conf.example
+fps
+fps_metrics=avg,0.01
+frametime
+frame_timing
+cpu_stats
+cpu_temp
+gpu_stats
+gpu_temp
+gpu_power
+vram
+ram
+gamemode
+EOF
+  fi
+
   # Stop the DualSense touchpad moving the mouse. Games and Steam read the
   # controller directly, so its touchpad still works for them.
   if put_file /etc/udev/rules.d/71-dualsense-touchpad.rules <<'EOF'; then
@@ -797,6 +894,11 @@ if $SUNSHINE; then
   fi
   systemctl --user enable app-dev.lizardbyte.app.Sunshine.service \
     || echo "NOTE: enable Sunshine yourself: systemctl --user enable app-dev.lizardbyte.app.Sunshine.service"
+  # Moonlight's ports, from Sunshine's docs. The admin page (47990) stays local.
+  if firewall_up && ! firewall-cmd -q --permanent --query-port=47989/tcp; then
+    sudo firewall-cmd -q --permanent --add-port={47984,47989,48010}/tcp --add-port=47998-48000/udp
+    sudo firewall-cmd -q --reload
+  fi
 fi
 
 if $LACT; then
@@ -869,6 +971,51 @@ pulse.rules = [
     }
 ]
 EOF
+
+  # Monthly checksum read of every Btrfs drive. Fedora ships the timer turned off.
+  # "auto" finds each drive once, so / and /home share one pass.
+  need_pkgs btrfsmaintenance
+  if ! in_file '^BTRFS_SCRUB_MOUNTPOINTS="auto"' /etc/sysconfig/btrfsmaintenance; then
+    sudo sed -i 's/^BTRFS_SCRUB_MOUNTPOINTS=.*/BTRFS_SCRUB_MOUNTPOINTS="auto"/' /etc/sysconfig/btrfsmaintenance
+  fi
+  sudo systemctl enable --now btrfs-scrub.timer
+
+  # Fedora's desktop zone opens every port above 1024 to the network. Close that
+  # and keep only what this PC uses. This never runs twice, so ports opened by
+  # hand later stay open.
+  if ! firewall_up; then
+    echo "NOTE: firewalld isn't running, so the firewall was left unchanged."
+  elif firewall_tight; then
+    skip "firewall ports"
+  else
+    sudo firewall-cmd -q --permanent --add-service=kdeconnect --add-service=mdns
+    if $GAMING; then
+      sudo firewall-cmd -q --permanent --add-service=steam-streaming --add-service=steam-lan-transfer
+    fi
+    sudo firewall-cmd -q --permanent --remove-port=1025-65535/tcp --remove-port=1025-65535/udp
+    sudo firewall-cmd -q --reload
+  fi
+
+  # dnf downloads 3 packages at a time by default.
+  put_file /etc/dnf/libdnf5.conf.d/90-parallel-downloads.conf <<'EOF' || true
+[main]
+max_parallel_downloads=10
+EOF
+
+  # Dynamic Boost for laptops. On this desktop it exits with "UnSupported System"
+  # at every boot. The driver package only enables it on first install.
+  if powerd_off; then
+    skip "nvidia-powerd"
+  else
+    sudo systemctl disable nvidia-powerd
+  fi
+
+  # Both fail at every login on Plasma Wayland: IMSettings doesn't support the
+  # desktop, and nvidia-settings has no saved settings to load.
+  mkdir -p "$HOME/.config/autostart"
+  for entry in imsettings-start nvidia-settings-user; do
+    autostart_off "$entry" || printf '[Desktop Entry]\nHidden=true\n' > "$HOME/.config/autostart/$entry.desktop"
+  done
 fi
 
 # 11. Snapshots before every dnf transaction (optional) --------------------
