@@ -150,7 +150,14 @@ function Get-Board {
 function Get-Cpu { Get-CimInstance Win32_Processor | Select-Object -First 1 }
 function Test-AmdCpu { (Get-Cpu).Manufacturer -eq 'AuthenticAMD' }
 function Test-X3D { (Get-Cpu).Name -match 'X3D' }
-function Test-Laptop { [bool](Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue) }
+# Chassis type, not Win32_Battery: a desktop on a USB UPS also reports a battery.
+function Test-Laptop {
+  $t = @((Get-CimInstance Win32_SystemEnclosure).ChassisTypes)
+  [bool]($t | Where-Object { $_ -in 8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32 })
+}
+# Invoke-RestMethod in PS 5.1 only decodes JSON when the server says it is JSON;
+# NVIDIA's driver lookup answers as text/html. So decode it here, always.
+function Get-Json($url) { (Invoke-WebRequest -UseBasicParsing -ErrorAction Stop $url).Content | ConvertFrom-Json }
 function Test-AsusBoard { (Get-Board).Maker -match 'ASUS' }
 function Get-BoardSupportUrl {
   $b = Get-Board
@@ -203,14 +210,15 @@ function Get-NvidiaLatest {
     $all = $x.LookupValueSearch.LookupValues.LookupValue
     $hit = $all | Where-Object { $_.Name -eq $g.Name -or $_.Name -eq $short } | Select-Object -First 1
     if (-not $hit -and -not (Test-Laptop)) {
-      $hit = $all | Where-Object { $_.Name -eq 'NVIDIA GeForce RTX 5090' } | Select-Object -First 1
+      $hit = $all | Where-Object { $_.Name -eq 'NVIDIA GeForce RTX 5090' -or $_.Name -eq 'GeForce RTX 5090' } | Select-Object -First 1
     }
     if (-not $hit) { return $null }
     $u = 'https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php' +
          "?func=DriverManualLookup&psid=$($hit.ParentID)&pfid=$($hit.Value)&osID=57&languageCode=1033" +
          '&beta=null&isWHQL=1&dltype=-1&dch=1&upCRD=0'
-    $r = Invoke-RestMethod -UseBasicParsing -ErrorAction Stop $u
+    $r = Get-Json $u
     $info = @($r.IDS)[0].downloadInfo
+    if (-not $info.Version -or -not $info.DownloadURL) { throw 'the answer had no driver version or download link' }
     $script:NvLatest = [pscustomobject]@{ Version = [version]$info.Version; Url = [uri]::UnescapeDataString($info.DownloadURL) }
   } catch { Warn "NVIDIA driver search failed: $($_.Exception.Message)" }
   return $script:NvLatest
@@ -223,24 +231,23 @@ $AmdChipsetPage = 'https://www.amd.com/en/support/downloads/drivers.html/chipset
 function Find-AmdLink($page, $pattern) {
   try {
     $html = (Invoke-WebRequest -UseBasicParsing -ErrorAction Stop $page).Content
-    $m = [regex]::Matches($html, $pattern) | ForEach-Object { $_.Value } | Sort-Object -Unique
-    return @($m)[-1]
+    return @([regex]::Matches($html, $pattern) | ForEach-Object { $_.Value } | Sort-Object -Unique)
   } catch { return $null }
 }
 function Get-AmdChipsetInstalled {
   $keys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
   $e = Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'AMD Chipset Software*' } | Select-Object -First 1
-  if ($e -and $e.DisplayVersion) { try { return [version]$e.DisplayVersion } catch {} }
+  if ($e) { return ConvertTo-Version $e.DisplayVersion }
   return $null
 }
 $script:ChipLatest = $null
 function Get-AmdChipsetLatest {
   if ($script:ChipLatest) { return $script:ChipLatest }
   # The same chipset package covers every AM4 and AM5 board.
-  $url = Find-AmdLink $AmdChipsetPage 'https://drivers\.amd\.com/drivers/amd_chipset_software_[0-9.]+\.exe'
-  if ($url -and $url -match '_([0-9.]+)\.exe$') {
-    $script:ChipLatest = [pscustomobject]@{ Version = [version]$Matches[1]; Url = $url }
-  }
+  $links = Find-AmdLink $AmdChipsetPage 'https://drivers\.amd\.com/drivers/amd_chipset_software_[0-9.]+\.exe'
+  $script:ChipLatest = $links | ForEach-Object {
+    if ($_ -match '_([0-9.]+)\.exe$') { [pscustomobject]@{ Version = (ConvertTo-Version $Matches[1]); Url = $_ } }
+  } | Where-Object { $_.Version } | Sort-Object Version | Select-Object -Last 1
   return $script:ChipLatest
 }
 function Test-AmdSoftware { Test-Path "$env:ProgramFiles\AMD\CNext\CNext\RadeonSoftware.exe" }
@@ -265,11 +272,11 @@ function Get-AsusPackages {
   try {
     $model = (Get-Board).Model
     $m = [uri]::EscapeDataString($model)
-    $r = Invoke-RestMethod -UseBasicParsing -ErrorAction Stop "https://www.asus.com/support/webapi/Product/CheckModelExists?website=global&model=$m"
+    $r = Get-Json "https://www.asus.com/support/webapi/Product/CheckModelExists?website=global&model=$m"
     $pdid = $r.Result.Obj.productId
     if (-not $pdid) { Warn "ASUS support does not know the model '$model'"; return $script:AsusList }
     $osid = if ([Environment]::OSVersion.Version.Build -ge 22000) { 52 } else { 45 }   # Windows 11 / 10, 64-bit
-    $d = Invoke-RestMethod -UseBasicParsing -ErrorAction Stop "https://www.asus.com/support/api/product.asmx/GetPDDrivers?website=global&model=$m&pdid=$pdid&osid=$osid&cpu="
+    $d = Get-Json "https://www.asus.com/support/api/product.asmx/GetPDDrivers?website=global&model=$m&pdid=$pdid&osid=$osid&cpu="
     $seen = @{}
     foreach ($cat in $d.Result.Obj) {
       if ($cat.Name -match $AsusSkip) { continue }
@@ -279,10 +286,13 @@ function Get-AsusPackages {
         $url = ($f.DownloadUrl.Global -split '\?')[0]
         $file = $url -replace '^.*/', ''
         if ($file -notmatch '\.zip$') { continue }
-        # Newest package per category and chip maker (the first word of the title):
-        # "Wireless|Realtek" and "Wireless|MediaTek" are both kept, because a board
-        # can ship with either chip; older Realtek Wi-Fi packages are dropped.
-        $family = $cat.Name + '|' + (($f.Title.Trim() -split '\s+')[0]).ToLower()
+        # Newest package per driver: the title without version numbers and the
+        # "for Windows ..." part. "Realtek RTL8922AE WiFi driver" and "MediaTek
+        # MT7925/7927 WiFi Driver" are both kept, because a board can ship with
+        # either chip. Older packages under another title are skipped at install
+        # time for hardware a newer package already covered.
+        $key = ($f.Title -split '(?i)\s+for\s+win')[0] -replace '(?i)\bv?\d+(\.\d+)+', '' -replace '[^A-Za-z0-9]+', ' '
+        $family = $cat.Name + '|' + $key.Trim().ToLowerInvariant()
         if ($seen.ContainsKey($family)) { continue }
         $seen[$family] = $true
         $script:AsusList += [pscustomobject]@{
@@ -307,8 +317,10 @@ function Get-AsusPending {
   $state = Get-AsusState
   @(Get-AsusPackages | Where-Object { -not $state.ContainsKey($_.File) })
 }
+# "V6.0.9600.1", "1125.27.50.919 (WHQL)" -> [version]; $null if there is none.
 function ConvertTo-Version($v) {
-  try { return [version]("$v".Trim()) } catch { return $null }
+  if ("$v" -match '\d+(\.\d+){1,3}') { try { return [version]$Matches[0] } catch {} }
+  return $null
 }
 
 # Windows Update -----------------------------------------------------------
@@ -317,13 +329,17 @@ function ConvertTo-Version($v) {
 # GPU drivers of the main GPU are left out: the GPU step installs the newer
 # vendor driver and Windows Update would otherwise offer an older one.
 function Get-WindowsUpdates {
-  $gpuMaker = switch (Get-MainGpuVendor) { 'NVIDIA' { 'NVIDIA' } 'AMD' { 'Advanced Micro Devices|AMD|ATI' } default { '^$' } }
+  # Anchored: a bare 'ATI' would also match "Corporation" (Intel, NVIDIA).
+  $gpuMaker = switch (Get-MainGpuVendor) { 'NVIDIA' { '^NVIDIA\b' } 'AMD' { '^(Advanced Micro Devices|AMD|ATI)\b' } default { '^$' } }
   $session = New-Object -ComObject Microsoft.Update.Session
   $result = $session.CreateUpdateSearcher().Search('IsInstalled=0 and IsHidden=0')
   $list = @()
   foreach ($u in $result.Updates) {
     if ($u.Type -eq 2 -and $u.DriverClass -eq 'Display' -and $u.DriverManufacturer -match $gpuMaker -and -not $NoDrivers) { continue }
     if ($u.Type -eq 1 -and $u.BrowseOnly) { continue }   # optional preview updates
+    # Feature upgrades (new Windows version) are left to Settings > Windows Update.
+    # Matched by category id, because category names are translated.
+    if (@($u.Categories | Where-Object { $_.CategoryID -eq '3689bdc8-b205-4af4-8d4a-a63924c5e9d5' }).Count) { continue }
     $list += $u
   }
   return $list
@@ -471,8 +487,8 @@ function Report {
       if ($all.Count -eq 0) { Absent 'ASUS mainboard drivers (could not read the ASUS driver list)' }
       elseif ($pending.Count -eq 0) { Pass "ASUS mainboard drivers ($($all.Count) packages checked)" }
       else {
-        Note 'ASUS packages not checked yet (only the ones for this PC get installed):'
-        foreach ($p in $pending) { Absent "ASUS $($p.Category): $($p.Title)" }
+        Absent "ASUS mainboard drivers: $($pending.Count) new package(s) to check (only those for this PC get installed)"
+        foreach ($p in $pending) { Row 'new' "$($p.Category): $($p.Title)" }
       }
     } else {
       Note "Mainboard drivers: not automated for $((Get-Board).Maker), see the support link below"
@@ -745,8 +761,25 @@ function Get-Installer($url, $signer, $name) {
   return $out
 }
 
+# Starts an installer and waits for that process only. Start-Process -Wait would
+# also wait for everything it starts (tray apps, launchers), which may never end.
+# Returns the exit code, or $null if it did not start or did not finish in time.
+$InstallerOk = @(0, 3010, 1641)   # 3010/1641 = done, reboot needed
+function Invoke-Installer($file, $arguments, $workDir, $timeoutSec = 1800, [switch]$Minimized) {
+  $params = @{ FilePath = $file; PassThru = $true; ErrorAction = 'Stop' }
+  if ($arguments) { $params.ArgumentList = $arguments }
+  if ($workDir) { $params.WorkingDirectory = $workDir }
+  if ($Minimized) { $params.WindowStyle = 'Minimized' }
+  try { $proc = Start-Process @params } catch { Warn "could not start $file : $($_.Exception.Message)"; return $null }
+  $null = $proc.Handle   # PS 5.1 only reports the exit code if the handle was opened
+  if (-not $proc.WaitForExit($timeoutSec * 1000)) { Warn "still running after $timeoutSec s: $file"; return $null }
+  if ($InstallerOk -contains $proc.ExitCode -and $proc.ExitCode -ne 0) { $script:NeedReboot = $true }
+  return $proc.ExitCode
+}
+
 function Install-App($app) {
   if (Test-App $app) { Skip $app.Name; return }
+  if (-not (Test-Winget)) { Fail "$($app.Name): winget is missing"; return }
   Info "installing $($app.Name)"
   $src = if ($app.Source) { $app.Source } else { 'winget' }
   $a = @('install', '--id', $app.Id, '--exact', '--source', $src, '--silent',
@@ -760,8 +793,8 @@ function Install-App($app) {
     Warn "winget failed ($code), using the download from the vendor"
     $exe = Get-Installer $app.Fallback.Url $app.Fallback.Signer
     if ($exe) {
-      $p = Start-Process -FilePath $exe -ArgumentList $app.Fallback.Args -Wait -PassThru
-      if ($p.ExitCode -eq 0) { return }
+      $rc = Invoke-Installer $exe $app.Fallback.Args
+      if ($InstallerOk -contains $rc) { return }
     }
   }
   Fail "$($app.Name) did not install (winget code $code)"
@@ -780,6 +813,15 @@ function Ensure-Winget {
     Add-AppxPackage -Path $f -ErrorAction Stop
   } catch { Warn $_.Exception.Message }
   return (Test-Winget)
+}
+
+# A standard user who elevates with another admin's password runs as that admin:
+# the per-user settings (Game Mode, mouse, captures) would land in the wrong profile.
+$desktopUser = (Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" | Select-Object -First 1 |
+  Invoke-CimMethod -MethodName GetOwner -ErrorAction SilentlyContinue).User
+if ($desktopUser -and $desktopUser -ne $env:USERNAME) {
+  Warn "Running as '$env:USERNAME', but '$desktopUser' is signed in. The gaming settings go to '$env:USERNAME'."
+  Warn "Best: make '$desktopUser' an administrator and run the script from that account."
 }
 
 Step 'Current state'
@@ -832,13 +874,13 @@ if (-not $NoDrivers) {
           $dir = Join-Path $Downloads "nvidia-$($new.Version)"
           & $sevenZip x $exe "-o$dir" -y | Out-Null
           Info 'running the NVIDIA installer silently (the screen may flicker)'
-          $p = Start-Process -FilePath (Join-Path $dir 'setup.exe') -ArgumentList '-s', '-noreboot', '-noeula' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Warn "NVIDIA installer exit code $($p.ExitCode) (often only means: reboot needed)" }
+          $rc = Invoke-Installer (Join-Path $dir 'setup.exe') @('-s', '-noreboot', '-noeula')
+          if ($rc -ne 0) { Warn "NVIDIA installer exit code $rc (often only means: reboot needed)" }
           $script:NeedReboot = $true
           Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
         } elseif ($exe) {
           Info 'running the NVIDIA installer'
-          Start-Process -FilePath $exe -Wait
+          $null = Invoke-Installer $exe
           $script:NeedReboot = $true
         } else { Fail 'NVIDIA driver download failed' }
       }
@@ -846,11 +888,11 @@ if (-not $NoDrivers) {
     'AMD' {
       if (Test-AmdSoftware) { Skip 'AMD Software: Adrenalin Edition (it updates itself)' }
       else {
-        $url = Find-AmdLink $AmdGpuPage 'https://drivers\.amd\.com/drivers/installer/[^"''<> ]+minimalsetup[^"''<> ]+\.exe'
+        $url = @(Find-AmdLink $AmdGpuPage 'https://drivers\.amd\.com/drivers/installer/[^"''<> ]+minimalsetup[^"''<> ]+\.exe')[0]
         $exe = if ($url) { Get-Installer $url 'Advanced Micro Devices' } else { $null }
         if ($exe) {
           Info 'starting the AMD installer: it finds the right driver, follow its window'
-          Start-Process -FilePath $exe -Wait
+          $null = Invoke-Installer $exe
           $script:NeedReboot = $true
         } else {
           Start-Process $AmdGpuPage
@@ -870,7 +912,7 @@ if (-not $NoDrivers) {
       $exe = if ($new) { Get-Installer $new.Url 'Advanced Micro Devices' } else { $null }
       if ($exe) {
         Info "starting the AMD chipset installer $($new.Version): follow its window"
-        Start-Process -FilePath $exe -Wait
+        $null = Invoke-Installer $exe
         $script:NeedReboot = $true
       } else {
         Start-Process $AmdChipsetPage
@@ -890,7 +932,7 @@ if (-not $NoDrivers) {
     else {
       # Hardware ids of every device in this PC, and the driver version each one runs.
       $devices = @(Get-CimInstance Win32_PnPEntity | ForEach-Object {
-        [pscustomobject]@{ Id = $_.PNPDeviceID; Hw = @(@($_.HardwareID) + @($_.CompatibleID) | Where-Object { $_ } | ForEach-Object { $_.ToUpper() }) } })
+        [pscustomobject]@{ Id = $_.PNPDeviceID; Hw = @(@($_.HardwareID) + @($_.CompatibleID) | Where-Object { $_ } | ForEach-Object { $_.ToUpperInvariant() }) } })
       $drv = @{}
       Get-CimInstance Win32_PnPSignedDriver | ForEach-Object {
         if ($_.DeviceID) { $drv[$_.DeviceID] = [pscustomobject]@{ Version = (ConvertTo-Version $_.DriverVersion); Provider = "$($_.DriverProviderName)" } } }
@@ -910,9 +952,11 @@ if (-not $NoDrivers) {
           Remove-Item $zip -Force -ErrorAction SilentlyContinue
           continue
         }
-        $dir = Join-Path $Downloads ($p.File -replace '\.zip$', '')
+        # Short folder name: some ASUS zips nest deep enough to pass the 260-char path limit.
+        $dir = Join-Path $Downloads 'asus'
         Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
-        Expand-Archive -Path $zip -DestinationPath $dir -Force
+        try { Expand-Archive -Path $zip -DestinationPath $dir -Force -ErrorAction Stop }
+        catch { Fail "ASUS $($p.Title): could not unpack ($($_.Exception.Message))"; continue }
         $ini = Get-ChildItem $dir -Recurse -Filter 'AsusSetup.ini' | Select-Object -First 1
         $cfg = @{}
         if ($ini) {
@@ -920,7 +964,7 @@ if (-not $NoDrivers) {
             if ($l -match '^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*(;;.*)?$' -and -not $cfg.ContainsKey($Matches[1])) { $cfg[$Matches[1]] = $Matches[2] }
           }
         }
-        $ids = @("$($cfg['HardwareID'])".Split(',') | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_ })
+        $ids = @("$($cfg['HardwareID'])".Split(',') | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_ })
         if (-not $cfg['SilentInstallRun'] -or $ids.Count -eq 0) {
           Info '  no automatic install in this package, skipped'
           $script:Manual.Add("ASUS $($p.Title): install it from $(Get-BoardSupportUrl)")
@@ -929,7 +973,7 @@ if (-not $NoDrivers) {
           continue
         }
         # ASUS lists id prefixes (HDAUDIO\FUNC_01&VEN_10EC&DEV_ = every Realtek codec).
-        $match = @($devices | Where-Object { $d = $_; @($d.Hw | Where-Object { $h = $_; @($ids | Where-Object { $h.StartsWith($_) }).Count }).Count })
+        $match = @($devices | Where-Object { $d = $_; @($d.Hw | Where-Object { $h = $_; @($ids | Where-Object { $h.StartsWith($_, [StringComparison]::Ordinal) }).Count }).Count })
         if ($match.Count -eq 0) {
           Info '  not for the hardware in this PC'
           Add-AsusState $p.File 'not for this PC'
@@ -961,18 +1005,22 @@ if (-not $NoDrivers) {
           continue
         }
         $wd = Join-Path $ini.DirectoryName "$($cfg['SilentInstallPath'])"
+        if (-not (Test-Path $wd)) { $wd = $ini.DirectoryName }
         Info "  installing $want silently (installed: $haveText)"
-        # Wait for the installer only: -Wait would also wait for every program it
-        # starts, which can be a background service that never ends.
         $timeout = 900
         if ("$($cfg['InstallFinishTimeOutSecond'])" -match '^\d+$') { $timeout = [math]::Max(300, [int]$cfg['InstallFinishTimeOutSecond'] * 2) }
-        $proc = Start-Process cmd.exe -ArgumentList '/c', $cfg['SilentInstallRun'] -WorkingDirectory $wd -WindowStyle Hidden -PassThru
-        $null = $proc.Handle   # PS 5.1 only reports the exit code if the handle was opened
-        if ($proc.WaitForExit($timeout * 1000)) { Info "  done (exit code $($proc.ExitCode))" }
-        else { Warn "  still running after $timeout s, continuing" }
-        Add-AsusState $p.File 'installed'
-        $script:NeedReboot = $true
-        Remove-Item $dir, $zip -Recurse -Force -ErrorAction SilentlyContinue
+        # cmd /s /c "..." keeps the quotes inside the ASUS command intact. Minimized,
+        # not hidden, so a window that asks something can still be found.
+        $rc = Invoke-Installer cmd.exe ('/s /c "' + $cfg['SilentInstallRun'] + '"') $wd $timeout -Minimized
+        if ($InstallerOk -contains $rc) {
+          Info "  done (exit code $rc)"
+          Add-AsusState $p.File 'installed'
+          $script:NeedReboot = $true
+          Remove-Item $dir, $zip -Recurse -Force -ErrorAction SilentlyContinue
+        } else {
+          # No state entry: the next run tries this package again.
+          Fail "ASUS $($p.Title): installer $(if ($null -eq $rc) { 'did not finish' } else { "exit code $rc" })"
+        }
       }
     }
   } else {
