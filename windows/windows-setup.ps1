@@ -1,5 +1,5 @@
 <#
-Windows 10/11 gaming setup
+Windows 10/11 setup
 Installs: Windows updates, the newest NVIDIA or AMD GPU driver, the AMD chipset
           driver (or Intel's driver assistant), the newest ASUS mainboard drivers
           that match this PC's hardware, game runtimes, Steam, Battle.net and a
@@ -7,34 +7,34 @@ Installs: Windows updates, the newest NVIDIA or AMD GPU driver, the AMD chipset
 It checks what is already set up first and only does what is missing, so it is
 safe to re-run at any time.
 
-Easiest: double-click windows-gaming-setup.cmd (it asks for admin rights).
-Or in PowerShell:  powershell -ExecutionPolicy Bypass -File .\windows-gaming-setup.ps1
-  -Check      show what is installed/active and change nothing (no admin needed)
-  -Guide      only write the instructions file (no admin needed)
-  -NoUpdate   skip Windows Update
-  -NoDrivers  skip the GPU, chipset and mainboard drivers
-  -NoApps     skip runtimes and launchers
-  -NoTweaks   skip the gaming settings
-  App flags (combine as you like, -All for everything):
-  -Gaming     more launchers: Epic Games, EA app, Ubisoft Connect, GOG Galaxy
-  -Tuning     MSI Afterburner + RivaTuner, HWiNFO, CPU-Z, GPU-Z
-  -Riot       Valorant, League of Legends
-  -Other      Display Driver Uninstaller, OBS Studio
+Easiest: double-click windows-setup.cmd (it asks for admin rights).
+Or in PowerShell:  powershell -ExecutionPolicy Bypass -File .\windows-setup.ps1
+  -check      show what is installed/active and change nothing (no admin needed)
+  -guide      only write the instructions file (no admin needed)
+  -noupdate   skip Windows Update
+  -nodrivers  skip the GPU, chipset and mainboard drivers
+  -noapps     skip runtimes and launchers
+  -notweaks   skip the gaming settings
+  App flags (combine as you like, -all for everything):
+  -gaming     more launchers: Epic Games, EA app, Ubisoft Connect, GOG Galaxy
+  -tuning     MSI Afterburner + RivaTuner, HWiNFO, CPU-Z, GPU-Z
+  -riot       Valorant, League of Legends
+  -other      Display Driver Uninstaller, OBS Studio
 #>
 [CmdletBinding()]
 param(
-  [switch]$Check,
-  [switch]$Guide,
-  [switch]$NoUpdate,
-  [switch]$NoDrivers,
-  [switch]$NoApps,
-  [switch]$NoTweaks,
-  [switch]$Gaming,
-  [switch]$Tuning,
-  [switch]$Riot,
-  [switch]$Other,
-  [switch]$All,
-  [switch]$Elevated   # set by the script itself when it restarts as admin
+  [switch]$check,
+  [switch]$guide,
+  [switch]$noupdate,
+  [switch]$nodrivers,
+  [switch]$noapps,
+  [switch]$notweaks,
+  [switch]$gaming,
+  [switch]$tuning,
+  [switch]$riot,
+  [switch]$other,
+  [switch]$all,
+  [switch]$elevated   # set by the script itself when it restarts as admin
 )
 
 # Native tools (winget, 7z) write to stderr; "Stop" would turn that into errors
@@ -44,8 +44,8 @@ $ProgressPreference = 'SilentlyContinue'   # the progress bar makes downloads 10
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $Mode = 'apply'
-if ($Guide) { $Mode = 'guide' }
-if ($Check) { $Mode = 'check' }
+if ($guide) { $Mode = 'guide' }
+if ($check) { $Mode = 'check' }
 
 function Test-Admin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -54,16 +54,20 @@ function Test-Admin {
 
 if ($Mode -eq 'apply' -and -not (Test-Admin)) {
   Write-Host 'Asking for admin rights...'
-  $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Elevated')
-  foreach ($k in $PSBoundParameters.Keys) { if ($k -ne 'Elevated') { $argList += "-$k" } }
+  $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-elevated')
+  foreach ($k in $PSBoundParameters.Keys) { if ($k -ne 'elevated') { $argList += "-$k" } }
   Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
   exit
 }
 
-$ScriptDir = Split-Path -Parent $PSCommandPath
-$GuideFile = Join-Path $ScriptDir 'windows-gaming-guide.txt'
-$LogFile   = Join-Path $ScriptDir 'windows-gaming-setup.log'
-$Downloads = Join-Path $env:TEMP 'windows-gaming-setup'
+# Everything the script writes stays in its own folder: the guide, the log of the
+# last run, the list of handled ASUS packages, and a downloads folder that is
+# emptied at the end of every run.
+$ScriptDir     = Split-Path -Parent $PSCommandPath
+$GuideFile     = Join-Path $ScriptDir 'windows-setup-guide.txt'
+$LogFile       = Join-Path $ScriptDir 'windows-setup.log'
+$AsusStateFile = Join-Path $ScriptDir 'asus-drivers.txt'
+$Downloads     = Join-Path $ScriptDir 'downloads'
 $PF86      = ${env:ProgramFiles(x86)}
 
 $script:NeedReboot = $false
@@ -77,7 +81,7 @@ function Warn($t) { Write-Host "    ! $t" -ForegroundColor Yellow }
 function Fail($t) { Write-Host "    ! $t" -ForegroundColor Red; $script:Failed.Add($t) }
 
 # App list ----------------------------------------------------------------
-# Edit freely. Group: base = always, the others only with their flag (or -All).
+# Edit freely. Group: base = always, the others only with their flag (or -all).
 # Id:       winget package id (check one with:  winget search <name>)
 # Path:     file that proves the app is installed (faster than asking winget)
 # Args:     extra winget arguments
@@ -123,10 +127,10 @@ $Apps = @(
 # Which flag turns on which group, and the heading in the report.
 $AppGroups = [ordered]@{
   base   = @{ On = $true;            Title = 'Runtimes and launchers' }
-  gaming = @{ On = [bool]($Gaming -or $All); Title = 'More launchers (-Gaming)' }
-  tuning = @{ On = [bool]($Tuning -or $All); Title = 'Tuning and monitoring (-Tuning)' }
-  riot   = @{ On = [bool]($Riot -or $All);   Title = 'Riot games (-Riot)' }
-  other  = @{ On = [bool]($Other -or $All);  Title = 'Other tools (-Other)' }
+  gaming = @{ On = [bool]($gaming -or $all); Title = 'More launchers (-gaming)' }
+  tuning = @{ On = [bool]($tuning -or $all); Title = 'Tuning and monitoring (-tuning)' }
+  riot   = @{ On = [bool]($riot -or $all);   Title = 'Riot games (-riot)' }
+  other  = @{ On = [bool]($other -or $all);  Title = 'Other tools (-other)' }
 }
 
 # winget exit codes that mean "fine": already installed, no newer version,
@@ -207,10 +211,10 @@ function Get-NvidiaLatest {
     $g = Get-Gpus | Where-Object { $_.Vendor -eq 'NVIDIA' } | Select-Object -First 1
     $short = $g.Name -replace '^NVIDIA ', ''
     [xml]$x = (Invoke-WebRequest -UseBasicParsing -ErrorAction Stop 'https://www.nvidia.com/Download/API/lookupValueSearch.aspx?TypeID=3').Content
-    $all = $x.LookupValueSearch.LookupValues.LookupValue
-    $hit = $all | Where-Object { $_.Name -eq $g.Name -or $_.Name -eq $short } | Select-Object -First 1
+    $gpuList = $x.LookupValueSearch.LookupValues.LookupValue
+    $hit = $gpuList | Where-Object { $_.Name -eq $g.Name -or $_.Name -eq $short } | Select-Object -First 1
     if (-not $hit -and -not (Test-Laptop)) {
-      $hit = $all | Where-Object { $_.Name -eq 'NVIDIA GeForce RTX 5090' -or $_.Name -eq 'GeForce RTX 5090' } | Select-Object -First 1
+      $hit = $gpuList | Where-Object { $_.Name -eq 'NVIDIA GeForce RTX 5090' -or $_.Name -eq 'GeForce RTX 5090' } | Select-Object -First 1
     }
     if (-not $hit) { return $null }
     $u = 'https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php' +
@@ -263,7 +267,6 @@ function Test-AmdSoftware { Test-Path "$env:ProgramFiles\AMD\CNext\CNext\RadeonS
 # Left out: chipset (installed from AMD directly, newer), GPU drivers, BIOS,
 # RAID and the utilities (Armoury Crate, AI Advisor, ...).
 $AsusSkip = 'VGA|Graphic|Chipset|BIOS|Firmware|SATA|RAID|Software|Utilit|Manual'
-$AsusStateFile = Join-Path $env:ProgramData 'windows-gaming-setup\asus-drivers.txt'
 
 $script:AsusList = $null
 function Get-AsusPackages {
@@ -310,7 +313,6 @@ function Get-AsusState {
   return $h
 }
 function Add-AsusState($file, $outcome) {
-  New-Item -ItemType Directory -Force -Path (Split-Path $AsusStateFile) | Out-Null
   Add-Content -Path $AsusStateFile -Value "$file`t$outcome"
 }
 function Get-AsusPending {
@@ -335,7 +337,7 @@ function Get-WindowsUpdates {
   $result = $session.CreateUpdateSearcher().Search('IsInstalled=0 and IsHidden=0')
   $list = @()
   foreach ($u in $result.Updates) {
-    if ($u.Type -eq 2 -and $u.DriverClass -eq 'Display' -and $u.DriverManufacturer -match $gpuMaker -and -not $NoDrivers) { continue }
+    if ($u.Type -eq 2 -and $u.DriverClass -eq 'Display' -and $u.DriverManufacturer -match $gpuMaker -and -not $nodrivers) { continue }
     if ($u.Type -eq 1 -and $u.BrowseOnly) { continue }   # optional preview updates
     # Feature upgrades (new Windows version) are left to Settings > Windows Update.
     # Matched by category id, because category names are translated.
@@ -449,7 +451,7 @@ function Report {
   Section 'Base'
   Item 'winget (App Installer)' { Test-Winget }
   if (Test-RebootPending) { WaitReboot 'Windows is waiting for a reboot' } else { Pass 'No reboot pending' }
-  if (-not $NoUpdate) {
+  if (-not $noupdate) {
     Write-Host '    (asking Windows Update, this can take a minute)'
     $wu = @(Get-WuPendingCached)
     $drv = @($wu | Where-Object { $_.Type -eq 2 }).Count
@@ -458,7 +460,7 @@ function Report {
     else { Absent "Windows Update: $sw system and $drv driver update(s) pending" }
   }
 
-  if (-not $NoDrivers) {
+  if (-not $nodrivers) {
     Section 'Drivers'
     switch (Get-MainGpuVendor) {
       'NVIDIA' {
@@ -482,10 +484,10 @@ function Report {
       Item 'Intel Driver & Support Assistant (chipset)' { Test-App @{ Id = 'Intel.IntelDriverAndSupportAssistant' } }
     }
     if (Test-AsusBoard) {
-      $all = @(Get-AsusPackages)
+      $asusAll = @(Get-AsusPackages)
       $pending = @(Get-AsusPending)
-      if ($all.Count -eq 0) { Absent 'ASUS mainboard drivers (could not read the ASUS driver list)' }
-      elseif ($pending.Count -eq 0) { Pass "ASUS mainboard drivers ($($all.Count) packages checked)" }
+      if ($asusAll.Count -eq 0) { Absent 'ASUS mainboard drivers (could not read the ASUS driver list)' }
+      elseif ($pending.Count -eq 0) { Pass "ASUS mainboard drivers ($($asusAll.Count) packages checked)" }
       else {
         Absent "ASUS mainboard drivers: $($pending.Count) new package(s) to check (only those for this PC get installed)"
         foreach ($p in $pending) { Row 'new' "$($p.Category): $($p.Title)" }
@@ -495,7 +497,7 @@ function Report {
     }
   }
 
-  if (-not $NoApps) {
+  if (-not $noapps) {
     foreach ($grp in $AppGroups.Keys) {
       $info = $AppGroups[$grp]
       Section $info.Title
@@ -507,7 +509,7 @@ function Report {
     }
   }
 
-  if (-not $NoTweaks) {
+  if (-not $notweaks) {
     Section 'Gaming settings'
     Item 'Game Mode on' { (Get-Reg $RegGameBar 'AutoGameModeEnabled') -ne 0 }
     $hags = Get-Reg $RegGfx 'HwSchMode'
@@ -537,11 +539,11 @@ function Report {
 function Write-GuideFile([switch]$ReuseReport) {
   $b = Get-Board
   $g = @"
-WINDOWS GAMING SETUP GUIDE
-Written by windows-gaming-setup.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm')
-Run the setup:      double-click windows-gaming-setup.cmd
-Check the system:   powershell -ExecutionPolicy Bypass -File "$PSCommandPath" -Check
-Refresh this file:  powershell -ExecutionPolicy Bypass -File "$PSCommandPath" -Guide
+WINDOWS SETUP GUIDE
+Written by windows-setup.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm')
+Run the setup:      double-click windows-setup.cmd
+Check the system:   powershell -ExecutionPolicy Bypass -File "$PSCommandPath" -check
+Refresh this file:  powershell -ExecutionPolicy Bypass -File "$PSCommandPath" -guide
 Log of the last run: $LogFile
 
 CONTENTS
@@ -569,22 +571,22 @@ In this order, skipping everything that is already done:
     the rest from the ASUS support page, see section 3.
   - Always: Visual C++ 2015-2022 (32+64-bit), DirectX legacy runtime,
     .NET 8 + 10, 7-Zip, Steam, Battle.net.
-  - App flags (combine them, or -All for everything):
-      -Gaming   Epic Games, EA app, Ubisoft Connect, GOG Galaxy
-      -Tuning   MSI Afterburner + RivaTuner (its overlay), HWiNFO, CPU-Z, GPU-Z
-      -Riot     Valorant, League of Legends (EU servers, see the app list)
-      -Other    Display Driver Uninstaller, OBS Studio
-    Example:  windows-gaming-setup.cmd -Gaming -Tuning
+  - App flags (combine them, or -all for everything):
+      -gaming   Epic Games, EA app, Ubisoft Connect, GOG Galaxy
+      -tuning   MSI Afterburner + RivaTuner (its overlay), HWiNFO, CPU-Z, GPU-Z
+      -riot     Valorant, League of Legends (EU servers, see the app list)
+      -other    Display Driver Uninstaller, OBS Studio
+    Example:  windows-setup.cmd -gaming -tuning
   - Gaming settings, see section 8.
 
-The app list sits at the top of windows-gaming-setup.ps1. Add or remove lines
+The app list sits at the top of windows-setup.ps1. Add or remove lines
 there; find package ids with:  winget search <name>
 Run it again after the reboot: Windows Update often has a second round.
 
 
 2. KEEPING DRIVERS UP TO DATE
 -----------------------------
-Re-run the script (or -Check to only look). It compares the installed NVIDIA
+Re-run the script (or -check to only look). It compares the installed NVIDIA
 and AMD chipset driver with the newest one and only installs when there is a
 newer one. For ASUS boards it lists the driver packages ASUS added since the
 last run. In between:
@@ -593,7 +595,7 @@ last run. In between:
   Apps    winget upgrade --all    (updates everything installed with winget)
 
 Clean GPU driver install (after problems or when switching NVIDIA <-> AMD):
-  run with -Other to get Display Driver Uninstaller, boot into Safe Mode,
+  run with -other to get Display Driver Uninstaller, boot into Safe Mode,
   run DDU "Clean and restart", then run this script again.
 
 
@@ -724,6 +726,11 @@ The report shows the refresh rate the display runs at now.
 
 10. CURRENT SYSTEM STATE
 ------------------------
+The same report as -check, from when this file was written.
+OK = working   MISSING = not set up   REBOOT = takes effect after a reboot
+off = optional and not installed   new = ASUS package not checked yet
+info = for your information, not counted
+
 "@
   if (-not $ReuseReport) { Report }
   $g += ($script:Lines -join "`r`n")
@@ -829,9 +836,9 @@ Report
 
 Step 'Preparing winget'
 if (Ensure-Winget) { & winget source update --disable-interactivity | Out-Null; Info 'winget ready' }
-else { Fail 'winget is missing: update "App Installer" in the Microsoft Store, then run again'; $NoApps = [switch]$true }
+else { Fail 'winget is missing: update "App Installer" in the Microsoft Store, then run again'; $noapps = [switch]$true }
 
-if (-not $NoUpdate) {
+if (-not $noupdate) {
   Step 'Windows Update'
   $list = @(Get-WuPendingCached)   # found by the report above
   if ($list.Count -eq 0) { Skip 'nothing pending' }
@@ -855,7 +862,7 @@ if (-not $NoUpdate) {
   }
 }
 
-if (-not $NoDrivers) {
+if (-not $nodrivers) {
   $gpu = Get-MainGpuVendor
   Step "GPU driver ($gpu)"
   switch ($gpu) {
@@ -877,7 +884,7 @@ if (-not $NoDrivers) {
           $rc = Invoke-Installer (Join-Path $dir 'setup.exe') @('-s', '-noreboot', '-noeula')
           if ($rc -ne 0) { Warn "NVIDIA installer exit code $rc (often only means: reboot needed)" }
           $script:NeedReboot = $true
-          Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $dir, $exe -Recurse -Force -ErrorAction SilentlyContinue
         } elseif ($exe) {
           Info 'running the NVIDIA installer'
           $null = Invoke-Installer $exe
@@ -1030,12 +1037,12 @@ if (-not $NoDrivers) {
   }
 }
 
-if (-not $NoApps) {
+if (-not $noapps) {
   Step 'Runtimes, launchers and apps'
   foreach ($a in Get-SelectedApps) { Install-App $a }
 }
 
-if (-not $NoTweaks) {
+if (-not $notweaks) {
   Step 'Gaming settings'
   function Set-Reg($path, $name, $value, $type, $label) {
     if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
@@ -1066,6 +1073,7 @@ if (-not $NoTweaks) {
 Step 'Final state'
 Report
 Write-GuideFile -ReuseReport
+Remove-Item $Downloads -Recurse -Force -ErrorAction SilentlyContinue
 
 Step 'Done'
 if ($script:Failed.Count) {
@@ -1082,4 +1090,4 @@ if ($script:NeedReboot -or (Test-RebootPending)) {
   Write-Host ' Reboot now, then run the script again: Windows Update often has a second round.' -ForegroundColor Yellow
 }
 try { Stop-Transcript | Out-Null } catch {}
-if ($Elevated) { Read-Host ' Press Enter to close' | Out-Null }
+if ($elevated) { Read-Host ' Press Enter to close' | Out-Null }

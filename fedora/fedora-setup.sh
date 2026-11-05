@@ -6,7 +6,7 @@
 # It checks what is already set up first and only does what is missing, so it is
 # safe to re-run at any time.
 #
-# Run as your normal user (not root):  bash fedora-dev-ai-setup.sh
+# Run as your normal user (not root):  bash fedora-setup.sh
 #   --check         show what is installed/active and change nothing (no sudo needed)
 #   --guide         only write the instructions file (no sudo needed)
 #   --no-update     skip the full "dnf upgrade" at the start
@@ -254,8 +254,8 @@ report() {
 # Instructions file --------------------------------------------------------
 write_guide() {
   {
-    printf 'FEDORA GAMING + DEV SETUP GUIDE\n'
-    printf 'Written by fedora-dev-ai-setup.sh on %s\n' "$(date '+%Y-%m-%d %H:%M')"
+    printf 'FEDORA SETUP GUIDE\n'
+    printf 'Written by fedora-setup.sh on %s\n' "$(date '+%Y-%m-%d %H:%M')"
     printf 'Refresh this file:  bash %s --guide\n' "$SCRIPT_PATH"
     printf 'Check the system:   bash %s --check\n' "$SCRIPT_PATH"
     cat <<'EOF'
@@ -832,7 +832,7 @@ EOF
   else
     mkdir -p "$HOME/.config/MangoHud"
     cat > "$HOME/.config/MangoHud/MangoHud.conf" <<'EOF'
-# Written once by fedora-dev-ai-setup.sh. Edit freely, or use GOverlay.
+# Written once by fedora-setup.sh. Edit freely, or use GOverlay.
 # All options: /usr/share/doc/mangohud/MangoHud.conf.example
 fps
 fps_metrics=avg,0.01
@@ -1071,16 +1071,13 @@ EOF
 if x3d_nopasswd >/dev/null 2>&1; then
   skip "x3d-mode sudo rule"
 else
-  SUDOERS_TMP="$(mktemp)"
-  cat > "$SUDOERS_TMP" <<EOF
-$USER ALL=(root) NOPASSWD: /usr/local/libexec/x3d-mode-set cache, /usr/local/libexec/x3d-mode-set frequency
-EOF
-  if sudo visudo -cf "$SUDOERS_TMP" >/dev/null; then
-    sudo install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/x3d-mode
+  # Checked and written straight from memory: no temp file anywhere.
+  SUDOERS_RULE="$USER ALL=(root) NOPASSWD: /usr/local/libexec/x3d-mode-set cache, /usr/local/libexec/x3d-mode-set frequency"
+  if printf '%s\n' "$SUDOERS_RULE" | sudo visudo -cf - >/dev/null; then
+    printf '%s\n' "$SUDOERS_RULE" | sudo install -m 0440 -o root -g root /dev/stdin /etc/sudoers.d/x3d-mode
   else
     echo "WARNING: sudoers rule failed validation; x3d-mode will ask for your password." >&2
   fi
-  rm -f "$SUDOERS_TMP"
 fi
 
 # User-facing command
