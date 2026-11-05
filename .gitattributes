@@ -1,0 +1,4 @@
+# Windows scripts need CRLF line endings (cmd.exe and PowerShell 5.1).
+windows/*.ps1 text eol=crlf
+windows/*.cmd text eol=crlf
+windows/*.txt text eol=crlf

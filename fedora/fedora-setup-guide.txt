@@ -1,7 +1,7 @@
 FEDORA GAMING + DEV SETUP GUIDE
-Written by fedora-dev-ai-setup.sh on 2026-11-01 19:46
-Refresh this file:  bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --guide
-Check the system:   bash /home/david/code/fedora-setup-script/fedora-dev-ai-setup.sh --check
+Written by fedora-dev-ai-setup.sh on 2026-11-05 16:17
+Refresh this file:  bash /home/david/code/pc-setup-scripts/fedora/fedora-dev-ai-setup.sh --guide
+Check the system:   bash /home/david/code/pc-setup-scripts/fedora/fedora-dev-ai-setup.sh --check
 
 CONTENTS
   1. Steam launch options       8. GPU Screen Recorder
@@ -337,7 +337,7 @@ Energy, so it doesn't benefit. To undo it, remove FastConnectable from
 OK = working   MISSING = not set up   REBOOT = takes effect after a reboot
 off = optional and not installed
 
- Fedora release 44 (Forty Four), kernel 7.2.13-200.fc44.x86_64
+ Fedora release 45 (Forty Five), kernel 7.2.15-300.fc45.x86_64
 
  Base system
   OK       RPM Fusion repos
