@@ -21,28 +21,60 @@ builds the archives and publishes the release.
 
 ## Fedora
 
+Run as your normal user, not root (it asks for your sudo password).
+
 ```bash
-bash fedora/fedora-setup.sh --check   # look only
-bash fedora/fedora-setup.sh           # set up
+bash fedora/fedora-setup.sh --check              # look only
+bash fedora/fedora-setup.sh                      # set up
+bash fedora/fedora-setup.sh --no-gaming --lact   # skip gaming, add LACT
 ```
 
-Options and details: `fedora/README.txt`; the full guide is `fedora/fedora-setup-guide.txt`.
+| Flag | What it does |
+|---|---|
+| `--check` | Show what is installed and active, change nothing (no sudo needed) |
+| `--guide` | Only write the guide (no sudo needed) |
+| `--no-update` | Skip the full `dnf upgrade` at the start |
+| `--no-dev` | Skip dev tools: compilers, Git, Python, Node.js, Rust, VS Code, Cursor, Claude Code, OpenCode, Codex CLI, Distrobox |
+| `--no-gaming` | Skip gaming: Steam, GameMode, MangoHud, gamescope, Lutris, Heroic, ProtonUp-Qt, dlss-swapper and the shader/DLSS setup |
+| `--no-tuning` | Skip system tuning: sysctl, zram, audio fixes, firewall, monthly Btrfs check |
+| `--no-snapshots` | Skip snapper and the snapshot before every dnf transaction |
+| `--sunshine` | Also install Sunshine (stream games to Moonlight) |
+| `--lact` | Also install LACT (GPU fan curves, power limit, clocks) |
+
+Everything is on by default except `--sunshine` and `--lact`. Details:
+`fedora/README.txt`; the full guide is `fedora/fedora-setup-guide.txt`.
 
 ## Windows
 
-Copy the `windows` folder to the PC and double-click `windows-setup.cmd`.
+Copy the `windows` folder to the PC and double-click `windows-setup.cmd`, or run
+it from a terminal in that folder with flags:
 
 ```bat
 windows-setup.cmd -check              :: look only
-windows-setup.cmd -gaming -tuning     :: plus Epic/EA/Ubisoft/GOG and Afterburner/HWiNFO/CPU-Z/GPU-Z
+windows-setup.cmd                     :: set up
+windows-setup.cmd -gaming -tuning     :: plus more launchers and tuning tools
 ```
 
-App flags: `-gaming`, `-tuning`, `-riot`, `-other`, `-dev`, `-all`.
-`-dev` installs Git, GitHub CLI, VS Code, Cursor, PowerShell 7, Python, Node.js,
-Rust with the C++ Build Tools, CMake, Ninja, ripgrep, fd, jq, Claude Code,
-OpenCode and Codex CLI, roughly the Windows side of the Fedora dev setup.
-WSL is left out on purpose (see the guide). Details: `windows/README.txt`;
-the full guide (`windows-setup-guide.txt`) is written on the first run.
+| Flag | What it does |
+|---|---|
+| `-check` | Show what is installed and active, change nothing (no admin needed) |
+| `-guide` | Only write the guide (no admin needed) |
+| `-noupdate` | Skip Windows Update |
+| `-nodrivers` | Skip the GPU, chipset and mainboard drivers |
+| `-noapps` | Skip runtimes and launchers |
+| `-notweaks` | Skip the gaming settings |
+| `-gaming` | Also install Epic Games, EA app, Ubisoft Connect, GOG Galaxy |
+| `-tuning` | Also install MSI Afterburner + RivaTuner, HWiNFO, CPU-Z, GPU-Z |
+| `-riot` | Also install Valorant, League of Legends |
+| `-other` | Also install Display Driver Uninstaller, OBS Studio |
+| `-dev` | Also install Git, GitHub CLI, VS Code, Cursor, PowerShell 7, Python, Node.js, Rust with the C++ Build Tools, CMake, Ninja, ripgrep, fd, jq, Claude Code, OpenCode, Codex CLI |
+| `-all` | All of the "also install" flags above |
+
+Always installed: Windows updates, GPU and chipset drivers, ASUS mainboard
+drivers, game runtimes, 7-Zip, Steam, Battle.net and the gaming settings.
+`-dev` is roughly the Windows side of the Fedora dev setup; WSL is left out on
+purpose (see the guide). Details: `windows/README.txt`; the full guide
+(`windows-setup-guide.txt`) is written on the first run.
 
 ### ASUS mainboard drivers
 
