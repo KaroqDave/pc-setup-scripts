@@ -6,7 +6,18 @@ and only does what is missing, so it is safe to re-run.
 | Folder | System | What it sets up |
 |---|---|---|
 | [`fedora/`](fedora/) | Fedora 44/45 KDE | NVIDIA + CUDA, codecs, dev tools, AI coding CLIs, gaming tools, system tuning, Btrfs snapshots |
-| [`windows/`](windows/) | Windows 10/11 | Windows updates, NVIDIA/AMD GPU driver, AMD chipset driver, ASUS mainboard drivers, game runtimes, Steam, Battle.net, more launchers and tools by flag, gaming settings |
+| [`windows/`](windows/) | Windows 10/11 | Windows updates, NVIDIA/AMD GPU driver, AMD chipset driver, ASUS mainboard drivers, game runtimes, Steam, Battle.net, more launchers, tools and dev tools by flag, gaming settings |
+
+## Download
+
+Every version is on the [Releases](../../releases) page:
+
+- `fedora-setup-vX.Y.Z.tar.gz`: unpack with `tar xzf`, then `bash fedora-setup.sh`
+- `windows-setup-vX.Y.Z.zip`: unzip on the PC, then double-click `windows-setup.cmd`
+- `SHA256SUMS.txt`: checksums of both archives
+
+New release: `git tag v1.2.0 && git push origin v1.2.0`. A GitHub Action
+builds the archives and publishes the release.
 
 ## Fedora
 
@@ -15,7 +26,7 @@ bash fedora/fedora-setup.sh --check   # look only
 bash fedora/fedora-setup.sh           # set up
 ```
 
-Options and details: top of `fedora/fedora-setup.sh` and `fedora/fedora-setup-guide.txt`.
+Options and details: `fedora/README.txt`; the full guide is `fedora/fedora-setup-guide.txt`.
 
 ## Windows
 
@@ -26,7 +37,11 @@ windows-setup.cmd -check              :: look only
 windows-setup.cmd -gaming -tuning     :: plus Epic/EA/Ubisoft/GOG and Afterburner/HWiNFO/CPU-Z/GPU-Z
 ```
 
-App flags: `-gaming`, `-tuning`, `-riot`, `-other`, `-all`. Details: `windows/README.txt`;
+App flags: `-gaming`, `-tuning`, `-riot`, `-other`, `-dev`, `-all`.
+`-dev` installs Git, GitHub CLI, VS Code, Cursor, PowerShell 7, Python, Node.js,
+Rust with the C++ Build Tools, CMake, Ninja, ripgrep, fd, jq, Claude Code,
+OpenCode and Codex CLI, roughly the Windows side of the Fedora dev setup.
+WSL is left out on purpose (see the guide). Details: `windows/README.txt`;
 the full guide (`windows-setup-guide.txt`) is written on the first run.
 
 ### ASUS mainboard drivers

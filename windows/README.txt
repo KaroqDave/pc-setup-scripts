@@ -20,6 +20,10 @@ More apps with flags (run from a terminal in this folder, combine freely):
   windows-setup.cmd -tuning    MSI Afterburner + RivaTuner, HWiNFO, CPU-Z, GPU-Z
   windows-setup.cmd -riot      Valorant, League of Legends
   windows-setup.cmd -other     Display Driver Uninstaller, OBS Studio
+  windows-setup.cmd -dev       dev tools: Git, GitHub CLI, VS Code, Cursor,
+                               PowerShell 7, Python, Node.js, Rust + C++ Build
+                               Tools, CMake, Ninja, ripgrep, fd, jq, Claude Code,
+                               OpenCode, Codex CLI
   windows-setup.cmd -all       all of the above
   windows-setup.cmd -gaming -tuning
 
@@ -29,10 +33,10 @@ The app list is at the top of windows-setup.ps1 and easy to edit.
 
 Files the script writes, all in this folder:
   windows-setup-guide.txt   the guide: every step, BIOS checklist, settings
-                             changed and how to undo them, and at the end the
-                             same report as -check. Refreshed after every run,
-                             or on its own with: windows-setup.cmd -guide
-  windows-setup.log   everything the last run printed
-  asus-drivers.txt           ASUS driver packages already handled
-  downloads\                 installers during a run, deleted at the end
-                             (needs about 3 GB free while running)
+                            changed and how to undo them, and at the end the
+                            same report as -check. Refreshed after every run,
+                            or on its own with: windows-setup.cmd -guide
+  windows-setup.log         everything the last run printed
+  asus-drivers.txt          ASUS driver packages already handled
+  downloads\                installers during a run, deleted at the end
+                            (needs about 3 GB free while running)

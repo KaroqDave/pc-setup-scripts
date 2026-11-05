@@ -20,6 +20,9 @@ Or in PowerShell:  powershell -ExecutionPolicy Bypass -File .\windows-setup.ps1
   -tuning     MSI Afterburner + RivaTuner, HWiNFO, CPU-Z, GPU-Z
   -riot       Valorant, League of Legends
   -other      Display Driver Uninstaller, OBS Studio
+  -dev        dev tools: Git, GitHub CLI, VS Code, Cursor, PowerShell 7, Python,
+              Node.js, Rust + C++ build tools, CMake, Ninja, ripgrep, fd, jq,
+              Claude Code, OpenCode, Codex CLI
 #>
 [CmdletBinding()]
 param(
@@ -33,6 +36,7 @@ param(
   [switch]$tuning,
   [switch]$riot,
   [switch]$other,
+  [switch]$dev,
   [switch]$all,
   [switch]$elevated   # set by the script itself when it restarts as admin
 )
@@ -123,6 +127,27 @@ $Apps = @(
 
   @{ Group = 'other';  Name = 'Display Driver Uninstaller'; Id = 'Wagnardsoft.DisplayDriverUninstaller' }
   @{ Group = 'other';  Name = 'OBS Studio';                 Id = 'OBSProject.OBSStudio' }
+
+  @{ Group = 'dev';    Name = 'Git';                Id = 'Git.Git' }
+  @{ Group = 'dev';    Name = 'GitHub CLI';         Id = 'GitHub.cli' }
+  @{ Group = 'dev';    Name = 'VS Code';            Id = 'Microsoft.VisualStudioCode' }
+  @{ Group = 'dev';    Name = 'Cursor';             Id = 'Anysphere.Cursor' }
+  @{ Group = 'dev';    Name = 'PowerShell 7';       Id = 'Microsoft.PowerShell' }
+  @{ Group = 'dev';    Name = 'Python 3.14';        Id = 'Python.Python.3.14' }
+  @{ Group = 'dev';    Name = 'Node.js LTS';        Id = 'OpenJS.NodeJS.LTS' }
+  # The MSVC compiler and Windows SDK: Rust needs its linker, and so does most C/C++.
+  # About 5 GB; --override replaces winget's switches to pick the C++ workload.
+  @{ Group = 'dev';    Name = 'C++ Build Tools (MSVC, for Rust and C++)'; Id = 'Microsoft.VisualStudio.BuildTools'
+     Args = @('--override', '--wait --quiet --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended') }
+  @{ Group = 'dev';    Name = 'Rust (rustup)';      Id = 'Rustlang.Rustup' }
+  @{ Group = 'dev';    Name = 'CMake';              Id = 'Kitware.CMake' }
+  @{ Group = 'dev';    Name = 'Ninja';              Id = 'Ninja-build.Ninja' }
+  @{ Group = 'dev';    Name = 'ripgrep';            Id = 'BurntSushi.ripgrep.MSVC' }
+  @{ Group = 'dev';    Name = 'fd';                 Id = 'sharkdp.fd' }
+  @{ Group = 'dev';    Name = 'jq';                 Id = 'jqlang.jq' }
+  @{ Group = 'dev';    Name = 'Claude Code';        Id = 'Anthropic.ClaudeCode' }
+  @{ Group = 'dev';    Name = 'OpenCode';           Id = 'SST.opencode' }
+  @{ Group = 'dev';    Name = 'Codex CLI';          Id = 'OpenAI.Codex' }
 )
 # Which flag turns on which group, and the heading in the report.
 $AppGroups = [ordered]@{
@@ -131,6 +156,7 @@ $AppGroups = [ordered]@{
   tuning = @{ On = [bool]($tuning -or $all); Title = 'Tuning and monitoring (-tuning)' }
   riot   = @{ On = [bool]($riot -or $all);   Title = 'Riot games (-riot)' }
   other  = @{ On = [bool]($other -or $all);  Title = 'Other tools (-other)' }
+  dev    = @{ On = [bool]($dev -or $all);    Title = 'Dev tools (-dev)' }
 }
 
 # winget exit codes that mean "fine": already installed, no newer version,
@@ -547,7 +573,7 @@ Refresh this file:  powershell -ExecutionPolicy Bypass -File "$PSCommandPath" -g
 Log of the last run: $LogFile
 
 CONTENTS
-  1. What the script does          6. Launcher tips
+  1. What the script does          6. Launchers and dev tools
   2. Keeping drivers up to date    7. Anti-cheat
   3. Mainboard drivers and BIOS    8. Settings changed and how to undo them
   4. BIOS checklist                9. Troubleshooting
@@ -576,6 +602,9 @@ In this order, skipping everything that is already done:
       -tuning   MSI Afterburner + RivaTuner (its overlay), HWiNFO, CPU-Z, GPU-Z
       -riot     Valorant, League of Legends (EU servers, see the app list)
       -other    Display Driver Uninstaller, OBS Studio
+      -dev      Git, GitHub CLI, VS Code, Cursor, PowerShell 7, Python 3.14,
+                Node.js LTS, C++ Build Tools + Rust, CMake, Ninja, ripgrep,
+                fd, jq, Claude Code, OpenCode, Codex CLI (see section 6)
     Example:  windows-setup.cmd -gaming -tuning
   - Gaming settings, see section 8.
 
@@ -659,13 +688,31 @@ Both: Settings > Display > Advanced display: pick the highest refresh rate.
 The report shows the refresh rate the display runs at now.
 
 
-6. LAUNCHER TIPS
-----------------
+6. LAUNCHERS AND DEV TOOLS
+--------------------------
+Launchers:
   - Put game libraries on the fastest drive. Steam: Settings > Storage.
     Battle.net: Settings > Downloads > Default install location.
   - Battle.net is installed to $PF86\Battle.net.
   - Turn off "start with Windows" in each launcher you do not use daily.
   - EA, Ubisoft and Battle.net games bought on Steam still need their launcher.
+
+Dev tools (-dev):
+  - Open a new terminal after the install: only new ones see the new PATH.
+  - First steps:
+      git config --global user.name "Your Name"
+      git config --global user.email "you@example.com"
+      gh auth login
+      claude          (Claude Code; opencode and codex work the same way)
+    Each AI tool asks you to sign in on its first start.
+  - The C++ Build Tools are installed before Rust because Rust on Windows uses
+    Microsoft's linker. Check:  rustc --version   cargo --version
+    They are large (about 5 GB) and the install takes a while.
+  - Python: use the "py" launcher, for example  py -m pip install <package>
+  - Updates for all of them:  winget upgrade --all
+  - Linux on Windows (the Distrobox of Windows) is WSL. The script leaves it
+    out because it turns on Windows' virtual machine platform and needs a
+    reboot. When you want it:  wsl --install   (installs Ubuntu)
 
 
 7. ANTI-CHEAT

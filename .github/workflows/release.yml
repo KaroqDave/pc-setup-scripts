@@ -1,0 +1,48 @@
+# Builds the download archives and publishes a GitHub release for every
+# version tag. To release:  git tag v1.2.0 && git push origin v1.2.0
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout applies .gitattributes, so the Windows files get CRLF here.
+      - uses: actions/checkout@v7
+
+      - name: Build archives
+        run: |
+          set -euo pipefail
+          v="$GITHUB_REF_NAME"
+          mkdir -p dist
+
+          # Fedora: tar.gz keeps the executable bit of fedora-setup.sh.
+          cp -r fedora "dist/fedora-setup-$v"
+          tar -C dist -czf "dist/fedora-setup-$v.tar.gz" "fedora-setup-$v"
+
+          # Windows: zip, the format Windows opens without extra tools.
+          cp -r windows "dist/windows-setup-$v"
+          (cd dist && zip -qr "windows-setup-$v.zip" "windows-setup-$v")
+
+          # Fail the release if the Windows files lost their CRLF line endings.
+          if grep -lU $'[^\r]$' "dist/windows-setup-$v"/*.ps1 "dist/windows-setup-$v"/*.cmd; then
+            echo "Windows files without CRLF line endings" >&2
+            exit 1
+          fi
+
+          (cd dist && sha256sum *.tar.gz *.zip > SHA256SUMS.txt)
+          rm -rf "dist/fedora-setup-$v" "dist/windows-setup-$v"
+          ls -l dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # --generate-notes lists the changes since the previous release.
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
