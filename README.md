@@ -5,7 +5,7 @@ and only does what is missing, so it is safe to re-run.
 
 | Folder | System | What it sets up |
 |---|---|---|
-| [`fedora/`](fedora/) | Fedora 44/45 KDE | NVIDIA + CUDA, codecs, dev tools, AI coding CLIs, gaming tools, system tuning, Btrfs snapshots |
+| [`fedora/`](fedora/) | Fedora 44/45 KDE | NVIDIA + CUDA or AMD Mesa + ROCm (detected), codecs, dev tools, AI coding CLIs, gaming tools, system tuning, Btrfs snapshots |
 | [`windows/`](windows/) | Windows 10/11 | Windows updates, NVIDIA/AMD GPU driver, AMD chipset driver, ASUS mainboard drivers, game runtimes, Steam, Battle.net, more launchers, tools and dev tools by flag, gaming settings |
 
 ## Download
@@ -35,13 +35,15 @@ bash fedora/fedora-setup.sh --no-gaming --lact   # skip gaming, add LACT
 | `--guide` | Only write the guide (no sudo needed) |
 | `--no-update` | Skip the full `dnf upgrade` at the start |
 | `--no-dev` | Skip dev tools: compilers, Git, Python, Node.js, Rust, VS Code, Cursor, Claude Code, OpenCode, Codex CLI, Distrobox |
-| `--no-gaming` | Skip gaming: Steam, GameMode, MangoHud, gamescope, Lutris, Heroic, ProtonUp-Qt, dlss-swapper and the shader/DLSS setup |
+| `--no-gaming` | Skip gaming: Steam, GameMode, MangoHud, gamescope, Lutris, Heroic, ProtonUp-Qt, dlss-swapper (NVIDIA) and the shader cache setup |
 | `--no-tuning` | Skip system tuning: sysctl, zram, audio fixes, firewall, monthly Btrfs check |
 | `--no-snapshots` | Skip snapper and the snapshot before every dnf transaction |
 | `--sunshine` | Also install Sunshine (stream games to Moonlight) |
 | `--lact` | Also install LACT (GPU fan curves, power limit, clocks) |
 
-Everything is on by default except `--sunshine` and `--lact`. Details:
+Everything is on by default except `--sunshine` and `--lact`. The script finds
+the graphics card itself (NVIDIA wins over a Ryzen iGPU) and only sets up the
+x3d-mode helper on a two-CCD Ryzen X3D. Details:
 `fedora/README.txt`; the full guide is `fedora/fedora-setup-guide.txt`.
 
 ## Windows

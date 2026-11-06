@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Fedora 44/45 KDE: dev + local AI + gaming setup for the RTX 5090 / 9950X3D machine
-# Installs: NVIDIA driver + CUDA (RPM Fusion), full codecs, dev tools, Rust, VS Code,
-#           Claude Code, OpenCode, Codex CLI, gaming tools, Bazzite/CachyOS/Nobara-style
-#           system tuning, and pre-update Btrfs snapshots.
+# Fedora 44/45 KDE: dev + local AI + gaming setup (built on an RTX 5090 / 9950X3D machine)
+# Installs: the graphics stack for the card it finds (NVIDIA: driver + CUDA from RPM
+#           Fusion; AMD: Mesa with full codecs + ROCm), full codecs, dev tools, Rust,
+#           VS Code, Claude Code, OpenCode, Codex CLI, gaming tools,
+#           Bazzite/CachyOS/Nobara-style system tuning, and pre-update Btrfs snapshots.
+#           On a two-CCD Ryzen X3D it also sets up the x3d-mode cache/frequency switch.
 # It checks what is already set up first and only does what is missing, so it is
 # safe to re-run at any time.
 #
@@ -102,6 +104,42 @@ put_file() {
 }
 
 # Facts the checks and the setup steps share ------------------------------
+# The card to set up, from the PCI ids of the display devices (class 03xx), as the
+# Windows script does it. NVIDIA wins over AMD so the iGPU of a Ryzen CPU next to a
+# GeForce card does not count. Anything else (Intel, a VM) gets Fedora's Mesa as is.
+detect_gpu() {
+  local d ids=""
+  for d in /sys/bus/pci/devices/*; do
+    [[ "$(cat "$d/class" 2>/dev/null)" == 0x03* ]] && ids+=" $(cat "$d/vendor")"
+  done
+  case "$ids" in
+    *0x10de*) echo nvidia ;;
+    *0x1002*) echo amd ;;
+    *)        echo other ;;
+  esac
+}
+GPU="$(detect_gpu)"
+case $GPU in
+  nvidia) GPU_LABEL="NVIDIA" ;;
+  amd)    GPU_LABEL="AMD" ;;
+  *)      GPU_LABEL="no NVIDIA or AMD card found" ;;
+esac
+# Shader cache size: NVIDIA's driver and Mesa (AMD, Intel) read different variables.
+if [[ $GPU == nvidia ]]; then
+  SHADER_CONF="$HOME/.config/environment.d/90-nvidia-shader-cache.conf"
+  SHADER_LINE="__GL_SHADER_DISK_CACHE_SIZE=17179869184"
+else
+  SHADER_CONF="$HOME/.config/environment.d/90-mesa-shader-cache.conf"
+  SHADER_LINE="MESA_SHADER_CACHE_MAX_SIZE=16G"
+fi
+# Login autostarts that fail at every login on Plasma Wayland.
+AUTOSTARTS_OFF=(imsettings-start)
+if [[ $GPU == nvidia ]]; then AUTOSTARTS_OFF+=(nvidia-settings-user); fi
+# Only the two-CCD X3D chips (7900X3D, 7950X3D, 9900X3D, 9950X3D) have the V-Cache
+# driver that x3d-mode switches. One-CCD X3D chips need nothing extra.
+x3d_cpu()          { [[ "$(grep -m1 '^model name' /proc/cpuinfo)" =~ [79]9[05]0X3D([^0-9A-Z]|$) ]]; }
+cpu_name()         { grep -m1 '^model name' /proc/cpuinfo | sed 's/^[^:]*: *//'; }
+mesa_version()     { rpm -q --qf '%{VERSION}' mesa-dri-drivers.x86_64 2>/dev/null; }
 secure_boot_on()   { [[ "$(mokutil --sb-state 2>/dev/null)" == *enabled* ]]; }
 mok_enrolled()     { [[ "$(mokutil --list-enrolled 2>/dev/null)" == *akmods@* ]]; }
 mok_queued()       { [[ -n "$(mokutil --list-new 2>/dev/null)" ]]; }
@@ -160,24 +198,43 @@ extra() {
 report() {
   N_OK=0 N_MISSING=0 N_REBOOT=0
   printf ' %s, kernel %s\n' "$(cat /etc/fedora-release)" "$(uname -r)"
+  printf ' CPU: %s, graphics set up for: %s\n' "$(cpu_name)" "$GPU_LABEL"
 
   group "Base system"
   item "RPM Fusion repos" rpm -q rpmfusion-free-release rpmfusion-nonfree-release
   if on_newest_kernel; then pass "Running the newest installed kernel"
   else wait_reboot "Running the newest installed kernel ($(newest_kernel))"; fi
-  item "Secure Boot key enrolled (or Secure Boot off)" sb_key_ok
+  case $GPU in
+    nvidia)
+      item "Secure Boot key enrolled (or Secure Boot off)" sb_key_ok
 
-  group "NVIDIA ($(driver_rpm))"
-  item "Kernel module loaded" kmod_loaded
-  item "Open kernel module in use" kmod_is_open
-  item "Module built for the newest kernel" kmod_for_newest
-  if driver_live; then pass "Loaded driver matches the installed packages"
-  else wait_reboot "Loaded driver matches the installed packages"; fi
-  item "CUDA runtime" rpm -q xorg-x11-drv-nvidia-cuda
-  item "32-bit libraries" rpm -q xorg-x11-drv-nvidia-libs.i686
-  item "Video acceleration (VA-API)" rpm -q libva-nvidia-driver.x86_64
-  item "Flatpak GL runtime matches the driver" gl_flatpak GL
-  item "Flatpak 32-bit GL runtime matches the driver" gl_flatpak GL32
+      group "NVIDIA ($(driver_rpm))"
+      item "Kernel module loaded" kmod_loaded
+      item "Open kernel module in use" kmod_is_open
+      item "Module built for the newest kernel" kmod_for_newest
+      if driver_live; then pass "Loaded driver matches the installed packages"
+      else wait_reboot "Loaded driver matches the installed packages"; fi
+      item "CUDA runtime" rpm -q xorg-x11-drv-nvidia-cuda
+      if $GAMING; then item "32-bit libraries" rpm -q xorg-x11-drv-nvidia-libs.i686; fi
+      item "Video acceleration (VA-API)" rpm -q libva-nvidia-driver.x86_64
+      item "Flatpak GL runtime matches the driver" gl_flatpak GL
+      item "Flatpak 32-bit GL runtime matches the driver" gl_flatpak GL32
+      ;;
+    amd)
+      group "AMD graphics (Mesa $(mesa_version))"
+      item "amdgpu kernel driver loaded" test -d /sys/module/amdgpu
+      item "GPU firmware" rpm -q amd-gpu-firmware
+      item "Vulkan driver (RADV)" rpm -q mesa-vulkan-drivers.x86_64
+      if $GAMING; then item "32-bit Mesa for Steam" rpm -q mesa-dri-drivers.i686 mesa-vulkan-drivers.i686; fi
+      item "Video acceleration with full codecs (VA-API)" rpm -q mesa-va-drivers-freeworld.x86_64 mesa-va-drivers-freeworld.i686
+      item "ROCm runtime (HIP, OpenCL)" rpm -q rocm-hip rocm-opencl rocminfo rocm-smi
+      ;;
+    *)
+      group "Graphics"
+      row INFO "No NVIDIA or AMD card found: Fedora's Mesa driver is used as it is"
+      if $GAMING; then item "32-bit Mesa for Steam" rpm -q mesa-dri-drivers.i686 mesa-vulkan-drivers.i686; fi
+      ;;
+  esac
 
   group "Codecs"
   item "Full ffmpeg" rpm -q ffmpeg
@@ -210,16 +267,22 @@ report() {
     item "ProtonUp-Qt" flatpak info net.davidotek.pupgui2
     item "Protontricks" flatpak info com.github.Matoking.protontricks
     item "GPU Screen Recorder" flatpak info com.dec05eba.gpu_screen_recorder
-    item "dlss-swapper" have dlss-swapper
+    if [[ $GPU == nvidia ]]; then item "dlss-swapper" have dlss-swapper; fi
     item "ntsync" test -e /dev/ntsync
     item "DualSense touchpad ignored on the desktop" test -e /etc/udev/rules.d/71-dualsense-touchpad.rules
     item "Bluetooth fast connect" in_file '^FastConnectable = true' /etc/bluetooth/main.conf
-    item "16 GB shader cache" in_file '=17179869184$' "$HOME/.config/environment.d/90-nvidia-shader-cache.conf"
+    item "16 GB shader cache" in_file "^$SHADER_LINE\$" "$SHADER_CONF"
+    if x3d_cpu; then
+      item "GameMode switches X3D mode" in_file 'x3d-mode game' "$HOME/.config/gamemode.ini"
+      item "GameMode leaves all cores available" in_file '^pin_cores=no' "$HOME/.config/gamemode.ini"
+    fi
+  fi
+
+  if x3d_cpu; then
+    group "Ryzen X3D"
     item "x3d-mode helper" have x3d-mode
     item "x3d-mode runs without a password" x3d_nopasswd
     item "X3D driver active (BIOS CPPC = Driver)" x3d_active
-    item "GameMode switches X3D mode" in_file 'x3d-mode game' "$HOME/.config/gamemode.ini"
-    item "GameMode leaves all cores available" in_file '^pin_cores=no' "$HOME/.config/gamemode.ini"
   fi
 
   if $TUNING; then
@@ -233,8 +296,8 @@ report() {
     item "Monthly Btrfs check of every drive" scrub_on
     item "Firewall opens only the ports in use" firewall_tight
     item "10 parallel dnf downloads" test -e /etc/dnf/libdnf5.conf.d/90-parallel-downloads.conf
-    item "Laptop-only nvidia-powerd turned off" powerd_off
-    item "Failing login autostarts turned off" autostart_off imsettings-start nvidia-settings-user
+    if [[ $GPU == nvidia ]]; then item "Laptop-only nvidia-powerd turned off" powerd_off; fi
+    item "Failing login autostarts turned off" autostart_off "${AUTOSTARTS_OFF[@]}"
   fi
 
   if $SNAPSHOTS; then
@@ -258,19 +321,26 @@ write_guide() {
     printf 'Written by fedora-setup.sh on %s\n' "$(date '+%Y-%m-%d %H:%M')"
     printf 'Refresh this file:  bash %s --guide\n' "$SCRIPT_PATH"
     printf 'Check the system:   bash %s --check\n' "$SCRIPT_PATH"
+    printf 'Written for: %s, graphics: %s\n' "$(cpu_name)" "$GPU_LABEL"
+    local s2="GameMode" s5="Upscaling" s12="Graphics driver updates"
+    if x3d_cpu; then s2="GameMode and X3D"; fi
+    case $GPU in
+      nvidia) s5="DLSS and Smooth Motion"; s12="NVIDIA driver updates" ;;
+      amd)    s5="FSR upscaling" ;;
+    esac
+    printf '\nCONTENTS\n'
+    printf '  %-29s%3s %s\n' \
+      "1. Steam launch options" 8. "GPU Screen Recorder" \
+      "2. $s2"                  9. "LACT (optional)" \
+      "3. MangoHud"             10. "Sunshine (optional)" \
+      "4. GOverlay"             11. "Snapshots and disk checks" \
+      "5. $s5"                  12. "$s12" \
+      "6. Proton, ntsync and HDR" 13. "Anti-cheat" \
+      "7. Other game tools"     14. "System settings and how to undo them" \
+      ""                        15. "Dev tools and Distrobox" \
+      ""                        16. "Controllers" \
+      ""                        17. "Current system state"
     cat <<'EOF'
-
-CONTENTS
-  1. Steam launch options       8. GPU Screen Recorder
-  2. GameMode and X3D           9. LACT (optional)
-  3. MangoHud                  10. Sunshine (optional)
-  4. GOverlay                  11. Snapshots and disk checks
-  5. DLSS and Smooth Motion    12. NVIDIA driver updates
-  6. Proton, ntsync and HDR    13. Anti-cheat
-  7. Other game tools          14. System settings and how to undo them
-                               15. Dev tools and Distrobox
-                               16. Controllers
-                               17. Current system state
 
 
 1. STEAM LAUNCH OPTIONS
@@ -283,12 +353,25 @@ Order matters: VARIABLES first, then tools, then %command% last.
   Everyday:
     gamemoderun mangohud %command%
 
+EOF
+    case $GPU in
+      nvidia) cat <<'EOF'
   Games with DLSS:
     gamemoderun mangohud dlss-swapper %command%
 
   Confirm which DLSS is running (GE-Proton or Proton-CachyOS):
     PROTON_DLSS_INDICATOR=1 gamemoderun mangohud dlss-swapper %command%
 
+EOF
+      ;;
+      amd) cat <<'EOF'
+  Games with FSR 3.1, upgraded to FSR 4 (GE-Proton or Proton-CachyOS, section 5):
+    PROTON_FSR4_UPGRADE=1 gamemoderun mangohud %command%
+
+EOF
+      ;;
+    esac
+    cat <<'EOF'
   Native Wayland window (GE-Proton or Proton-CachyOS):
     PROTON_ENABLE_WAYLAND=1 gamemoderun mangohud %command%
 
@@ -299,10 +382,12 @@ Order matters: VARIABLES first, then tools, then %command% last.
     gamemoderun gamescope -W 3840 -H 2160 -w 2560 -h 1440 -r 240 -f -F fsr --mangoapp -- %command%
 
 
+EOF
+    if x3d_cpu; then cat <<'EOF'
 2. GAMEMODE AND X3D
 -------------------
 "gamemoderun" does the following while a game runs, then undoes it on exit:
-  - switches the 9950X3D to cache mode (x3d-mode game)
+  - switches the X3D CPU to cache mode (x3d-mode game)
   - sets the CPU governor to performance
 
 Check that it works, while a game is running:
@@ -315,14 +400,30 @@ Manual control:
   x3d-mode dev      frequency mode, best for compiling and general work
 
 Cache mode is a preference. The CPU favours the V-Cache cores, but a busy game
-can still use the others. Core pinning is off, so games get all 32 threads.
-Helldivers 2 ran more stably that way: pinned to the 16 V-Cache threads, GPU
-usage kept dropping.
+can still use the others. Core pinning is off, so games get every thread. On
+the 9950X3D, Helldivers 2 ran more stably that way: pinned to the 16 V-Cache
+threads, GPU usage kept dropping.
 
 Settings file: ~/.config/gamemode.ini
-To try pinning, change the line to pin_cores=0-7,16-23 and compare. To turn it
-off, set pin_cores=no. Don't just delete the line: GameMode pins by default, so
-it would fall back to guessing the cores.
+To try pinning, change the line to the V-Cache threads and compare: 16 cores
+(7950X3D, 9950X3D) pin_cores=0-7,16-23, 12 cores (7900X3D, 9900X3D)
+pin_cores=0-5,12-17. To turn it off again, set pin_cores=no. Don't just delete
+the line: GameMode pins by default, so it would fall back to guessing the cores.
+EOF
+    else cat <<'EOF'
+2. GAMEMODE
+-----------
+"gamemoderun" sets the CPU governor to performance while a game runs, then
+undoes it on exit.
+
+Check that it works, while a game is running:
+  gamemoded -s      should say "gamemode is active"
+
+Settings file: ~/.config/gamemode.ini (not written by the script; the example
+with every option is /usr/share/gamemode/gamemode.ini).
+EOF
+    fi
+    cat <<'EOF'
 
 
 3. MANGOHUD
@@ -361,6 +462,9 @@ A GUI for MangoHud, vkBasalt (sharpening and other effects) and OptiScaler
     with anti-cheat.
 
 
+EOF
+    case $GPU in
+    nvidia) cat <<'EOF'
 5. DLSS AND SMOOTH MOTION
 -------------------------
 "dlss-swapper" is a small wrapper you add per game. It does two things:
@@ -388,6 +492,38 @@ Launch options, per game:
 
 Overlays can clash with it. If MangoHud misbehaves, add NVPRESENT_QUEUE_FAMILY=1
 in front as well, which costs some performance.
+EOF
+    ;;
+    amd) cat <<'EOF'
+5. FSR UPSCALING
+----------------
+AMD's upscaler is FSR. On Linux there is no driver panel that forces it, so it
+is set per game in Steam's launch options:
+
+  - Games with FSR 3.1: GE-Proton and Proton-CachyOS can swap it for FSR 4,
+    which looks clearly better. FSR 4 needs a Radeon RX 9000 card (RDNA 4).
+      PROTON_FSR4_UPGRADE=1 gamemoderun mangohud %command%
+    RX 7000 cards (RDNA 3) can try PROTON_FSR4_RDNA3_UPGRADE=1 instead. That
+    runs FSR 4 in a slower fallback mode, so compare it with the game's own FSR.
+    Proton Experimental ignores both. If one stops working, check the GE-Proton
+    release notes: these options are still new and can be renamed.
+  - Games without FSR: let gamescope upscale with FSR 1 (the last example in
+    section 1). It works with every game, but looks softer than FSR 3 or 4.
+
+Pick the Proton build under Properties > Compatibility > Force a specific tool.
+Try the upgrade on single-player games first. It changes FSR files, and how
+anti-cheat reacts to that varies by game.
+EOF
+    ;;
+    *) cat <<'EOF'
+5. UPSCALING
+------------
+Games without their own upscaler can use gamescope's FSR 1 upscaling, see the
+last example in section 1.
+EOF
+    ;;
+    esac
+    cat <<'EOF'
 
 
 6. PROTON, NTSYNC AND HDR
@@ -419,19 +555,41 @@ Mangohud options. Confirm GameMode with the checks in section 2.
 
 8. GPU SCREEN RECORDER
 ----------------------
-Records and clips gameplay through NVENC with very low overhead, similar to
-ShadowPlay. Start it from the application menu, then pick the capture target,
-codec, and hotkeys in the app. Its Replay mode keeps the last few minutes so you
-can save a clip after something happens. Encoding on your RTX 5090 runs on a
-dedicated chip, so games keep their performance.
+Records and clips gameplay through the graphics card's video encoder with very
+low overhead, similar to ShadowPlay. Start it from the application menu, then
+pick the capture target, codec, and hotkeys in the app. Its Replay mode keeps
+the last few minutes so you can save a clip after something happens. Encoding
+runs on a dedicated chip, so games keep their performance.
+EOF
+    if [[ $GPU == amd ]]; then cat <<'EOF'
+On AMD it encodes through VA-API. H.264 and HEVC need the full-codec driver the
+script installs (mesa-va-drivers-freeworld); Fedora's own Mesa leaves them out.
+EOF
+    fi
+    cat <<'EOF'
 
 
 9. LACT (optional, install with --lact)
 ---------------------------------------
 GPU control panel: fan curves, power limit and clocks. Start it from the
-application menu. Your RTX 5090 allows a 400-600 W power limit, and lowering it
-is the simplest way to cut heat and noise. Changes need the background service:
+application menu. Lowering the power limit is the simplest way to cut heat and
+noise. Changes need the background service:
   systemctl status lactd
+EOF
+    case $GPU in
+      nvidia) cat <<'EOF'
+Your RTX 5090 allows a 400-600 W power limit.
+EOF
+      ;;
+      amd) cat <<'EOF'
+On AMD, fan curves and the power limit work right away. Changing clocks and
+voltages also needs overclocking unlocked in the kernel driver. LACT can do
+that for you ("Enable AMD Overclocking" in its menu); it takes effect after a
+reboot.
+EOF
+      ;;
+    esac
+    cat <<'EOF'
 
 
 10. SUNSHINE (optional, install with --sunshine)
@@ -468,6 +626,9 @@ Nothing pops up if it finds a problem, so look at the results now and then:
 Run one now:  sudo systemctl start btrfs-scrub.service
 
 
+EOF
+    case $GPU in
+    nvidia) cat <<'EOF'
 12. NVIDIA DRIVER UPDATES
 -------------------------
 After a kernel or driver update, the module is rebuilt in the background, which
@@ -482,14 +643,48 @@ menu, then run:
 Flatpak apps need a runtime that matches the driver. After a driver update run:
   flatpak update
 If --check still shows it as MISSING, Flathub hasn't published it yet.
+EOF
+    ;;
+    amd) cat <<'EOF'
+12. GRAPHICS DRIVER UPDATES
+---------------------------
+The AMD driver is part of the kernel (amdgpu) and of Mesa, so it updates with
+the rest of the system and nothing is rebuilt. Flatpak apps bring their own Mesa
+and update with: flatpak update
+
+The full-codec video driver (mesa-va-drivers-freeworld) comes from RPM Fusion
+and must match the Mesa version exactly. After a Mesa update RPM Fusion can be a
+day or two behind; dnf keeps the current Mesa until it has caught up.
+EOF
+    ;;
+    *) cat <<'EOF'
+12. GRAPHICS DRIVER UPDATES
+---------------------------
+The graphics driver is part of the kernel and of Mesa, so it updates with the
+rest of the system and nothing is rebuilt.
+EOF
+    ;;
+    esac
+    cat <<'EOF'
 
 
 13. ANTI-CHEAT
 --------------
 Easy Anti-Cheat Linux v2 (for example Fortnite) needs Secure Boot, TPM 2.0,
-kernel lockdown and modules signed by a recognised authority. Your NVIDIA module
-is signed with your own local key, and Epic says an enrolled key doesn't satisfy
-this by itself, so expect EAC v2 games to refuse to run on this setup.
+kernel lockdown and modules signed by a recognised authority.
+EOF
+    if [[ $GPU == nvidia ]]; then cat <<'EOF'
+Your NVIDIA module is signed with your own local key, and Epic says an enrolled
+key doesn't satisfy this by itself, so expect EAC v2 games to refuse to run on
+this setup.
+EOF
+    else cat <<'EOF'
+The graphics driver is part of Fedora's own signed kernel, so no self-signed
+module stands in the way. Whether a game runs still depends on the other checks,
+so try the one you care about.
+EOF
+    fi
+    cat <<'EOF'
 
 
 14. SYSTEM SETTINGS AND HOW TO UNDO THEM
@@ -512,15 +707,15 @@ Each setting is one file. Delete it with sudo rm and reboot to undo it.
       the snapshot before each dnf transaction
   /etc/dnf/libdnf5.conf.d/90-parallel-downloads.conf
       10 downloads at once, up from dnf's default of 3
-  ~/.config/environment.d/90-nvidia-shader-cache.conf
-      16 GB NVIDIA shader cache, up from the 1 GB default
-  ~/.config/gamemode.ini
-      X3D switching ([custom]) and core pinning, which is off ([cpu])
-  ~/.config/MangoHud/MangoHud.conf
-      what the MangoHud overlay shows
-  ~/.config/autostart/imsettings-start.desktop
-  ~/.config/autostart/nvidia-settings-user.desktop
-      hide two autostarts that fail at every login on Plasma Wayland
+EOF
+    printf '  %s\n      16 GB shader cache, up from the 1 GB default\n' "${SHADER_CONF/#$HOME/\~}"
+    if x3d_cpu; then
+      printf '  ~/.config/gamemode.ini\n      X3D switching ([custom]) and core pinning, which is off ([cpu])\n'
+    fi
+    printf '  ~/.config/MangoHud/MangoHud.conf\n      what the MangoHud overlay shows\n'
+    printf '  ~/.config/autostart/%s.desktop\n' "${AUTOSTARTS_OFF[@]}"
+    printf '      hide autostarts that fail at every login on Plasma Wayland\n'
+    cat <<'EOF'
 
 These are undone with a command instead:
   Firewall (see below):
@@ -528,8 +723,13 @@ These are undone with a command instead:
       sudo firewall-cmd --reload
   Monthly disk check:
       sudo systemctl disable --now btrfs-scrub.timer
+EOF
+    if [[ $GPU == nvidia ]]; then cat <<'EOF'
   nvidia-powerd, a laptop feature that stops at every boot on this PC:
       sudo systemctl enable nvidia-powerd
+EOF
+    fi
+    cat <<'EOF'
 
 Firewall: Fedora's desktop zone allows every port from 1025 upwards. The script
 closes that range and keeps KDE Connect, local device discovery (mDNS), and
@@ -561,12 +761,24 @@ desktop. It shares your home folder, GUI, audio and USB devices, so it is useful
 when a tool only supports Ubuntu or Arch, or needs libraries that you don't want
 on Fedora. Nothing inside the box touches the host system.
 
-  distrobox create --nvidia --image ubuntu:24.04 --name ubuntu
+EOF
+    if [[ $GPU == nvidia ]]; then
+      echo "  distrobox create --nvidia --image ubuntu:24.04 --name ubuntu"
+    else
+      echo "  distrobox create --image ubuntu:24.04 --name ubuntu"
+    fi
+    cat <<'EOF'
   distrobox enter ubuntu       work inside it, with apt and your own files
   distrobox list               show your boxes
   distrobox rm ubuntu          delete the box (your home folder files stay)
 
---nvidia passes your GPU through, including CUDA, for local AI tools.
+EOF
+    case $GPU in
+      nvidia) echo "--nvidia passes your GPU through, including CUDA, for local AI tools." ;;
+      amd)    echo "The box shares /dev with your desktop, so the GPU works inside it. For ROCm"
+              echo "(local AI tools), install AMD's ROCm packages inside the box as well." ;;
+    esac
+    cat <<'EOF'
 
 
 16. CONTROLLERS
@@ -630,50 +842,82 @@ else
     "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-${FED}.noarch.rpm"
 fi
 
-# 3. Secure Boot key (only if Secure Boot is on) ---------------------------
-need_pkgs mokutil
+# 3-4. Graphics stack for the card found ------------------------------------
 MOK_PENDING=false
-if secure_boot_on; then
-  if mok_enrolled; then
-    skip "Secure Boot signing key"
-  elif mok_queued; then
-    echo "A key is already waiting for the blue MOK screen; finish that on the next reboot."
-    MOK_PENDING=true
-  else
-    MOK_KEY=/etc/pki/akmods/certs/public_key.der
-    step "Secure Boot is ON: creating a signing key for the NVIDIA module"
-    need_pkgs kmodtool akmods openssl
-    sudo test -f "$MOK_KEY" || sudo kmodgenca -a
-    echo "You'll now set a one-time password. Remember it: you type it once at the blue MOK screen after reboot."
-    sudo mokutil --import "$MOK_KEY"
-    MOK_PENDING=true
+case $GPU in
+nvidia)
+  # 3. Secure Boot key (only if Secure Boot is on). Only the NVIDIA module needs
+  # it: it is built on this PC, so the kernel only loads it signed with this key.
+  need_pkgs mokutil
+  if secure_boot_on; then
+    if mok_enrolled; then
+      skip "Secure Boot signing key"
+    elif mok_queued; then
+      echo "A key is already waiting for the blue MOK screen; finish that on the next reboot."
+      MOK_PENDING=true
+    else
+      MOK_KEY=/etc/pki/akmods/certs/public_key.der
+      step "Secure Boot is ON: creating a signing key for the NVIDIA module"
+      need_pkgs kmodtool akmods openssl
+      sudo test -f "$MOK_KEY" || sudo kmodgenca -a
+      echo "You'll now set a one-time password. Remember it: you type it once at the blue MOK screen after reboot."
+      sudo mokutil --import "$MOK_KEY"
+      MOK_PENDING=true
+    fi
   fi
-fi
 
-# 4. NVIDIA driver + CUDA runtime -----------------------------------------
-step "Installing the NVIDIA driver and CUDA runtime"
-need_pkgs kernel-devel akmod-nvidia xorg-x11-drv-nvidia-cuda nvtop
-# Keep dnf autoremove from ever taking the driver out (RPM Fusion's advice).
-sudo dnf mark user akmod-nvidia >/dev/null 2>&1 || true
+  # 4. NVIDIA driver + CUDA runtime
+  step "Installing the NVIDIA driver and CUDA runtime"
+  need_pkgs kernel-devel akmod-nvidia xorg-x11-drv-nvidia-cuda nvtop
+  # Keep dnf autoremove from ever taking the driver out (RPM Fusion's advice).
+  sudo dnf mark user akmod-nvidia >/dev/null 2>&1 || true
 
-if ! kmod_for_newest; then
-  step "Building the NVIDIA kernel module (can take a few minutes)"
-  sudo akmods --force --kernels "$(newest_kernel)"
-fi
-if kmod_for_newest; then
-  echo "NVIDIA module built: version $(modinfo -k "$(newest_kernel)" -F version nvidia)"
-else
-  echo "WARNING: module not found yet. It will retry on next boot; check with: modinfo -F version nvidia"
-fi
+  if ! kmod_for_newest; then
+    step "Building the NVIDIA kernel module (can take a few minutes)"
+    sudo akmods --force --kernels "$(newest_kernel)"
+  fi
+  if kmod_for_newest; then
+    echo "NVIDIA module built: version $(modinfo -k "$(newest_kernel)" -F version nvidia)"
+  else
+    echo "WARNING: module not found yet. It will retry on next boot; check with: modinfo -F version nvidia"
+  fi
+  ;;
+amd)
+  # 4. AMD: the kernel driver (amdgpu) and Mesa (RADV Vulkan) come with Fedora,
+  # signed, so Secure Boot needs nothing. Named here so a trimmed install gets them.
+  # ROCm is AMD's CUDA counterpart for local AI tools.
+  step "Installing the AMD graphics stack and ROCm runtime"
+  need_pkgs amd-gpu-firmware mesa-dri-drivers.x86_64 mesa-vulkan-drivers.x86_64 \
+    rocm-hip rocm-opencl rocminfo rocm-smi nvtop
+  ;;
+*)
+  step "Graphics driver"
+  echo "No NVIDIA or AMD card found, so Fedora's Mesa driver stays as it is."
+  ;;
+esac
 
-# 4b. Full codecs + NVIDIA video acceleration ------------------------------
+# 4b. Full codecs + hardware video acceleration ------------------------------
 # Bazzite and Nobara ship these out of the box; stock Fedora has the patent-free set.
-step "Installing full codecs and NVIDIA video acceleration"
+step "Installing full codecs and video acceleration"
 if rpm -q ffmpeg-free >/dev/null 2>&1; then
   sudo dnf swap -y ffmpeg-free ffmpeg --allowerasing
 fi
-need_pkgs ffmpeg gstreamer1-plugin-libav gstreamer1-plugins-bad-freeworld \
-  libva-nvidia-driver.x86_64 libva-nvidia-driver.i686 libva-utils vdpauinfo
+need_pkgs ffmpeg gstreamer1-plugin-libav gstreamer1-plugins-bad-freeworld libva-utils
+case $GPU in
+nvidia)
+  need_pkgs libva-nvidia-driver.x86_64 libva-nvidia-driver.i686 vdpauinfo
+  ;;
+amd)
+  # Fedora's Mesa leaves out H.264 and HEVC; RPM Fusion's build has them. It sits
+  # next to Fedora's (dri-freeworld); --allowerasing replaces the separate
+  # mesa-va-drivers package that older Fedora releases still have.
+  if rpm -q mesa-va-drivers-freeworld.x86_64 mesa-va-drivers-freeworld.i686 >/dev/null 2>&1; then
+    skip "mesa-va-drivers-freeworld"
+  else
+    sudo dnf install -y --allowerasing mesa-va-drivers-freeworld.x86_64 mesa-va-drivers-freeworld.i686
+  fi
+  ;;
+esac
 
 if $DEV; then
   # 5. Dev tools -------------------------------------------------------------
@@ -770,9 +1014,12 @@ fi
 # 9. Gaming (optional) -----------------------------------------------------
 if $GAMING; then
   step "Installing gaming tools"
+  # 32-bit graphics libraries for Steam and older games.
+  if [[ $GPU == nvidia ]]; then GPU32=(xorg-x11-drv-nvidia-libs.i686)
+  else GPU32=(mesa-dri-drivers.i686 mesa-vulkan-drivers.i686); fi
   need_pkgs \
     steam steam-devices \
-    xorg-x11-drv-nvidia-libs.i686 \
+    "${GPU32[@]}" \
     gamemode.x86_64 gamemode.i686 mangohud.x86_64 mangohud.i686 gamescope \
     goverlay ntsync-autoload
   # Same flag Bazzite uses: Lutris fetches its own runners, so skip the weak deps.
@@ -783,7 +1030,8 @@ if $GAMING; then
   fi
 
   # Flathub apps. Protontricks is the Flatpak on purpose: the RPM drags in 2 GiB
-  # of Wine + mingw. GPU Screen Recorder is Nobara's low-overhead NVENC recorder.
+  # of Wine + mingw. GPU Screen Recorder is Nobara's low-overhead recorder (NVENC
+  # on NVIDIA, VA-API on AMD).
   need_pkgs flatpak
   flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
   need_flatpaks \
@@ -801,15 +1049,18 @@ if $GAMING; then
     flatpak install --user -y flathub "org.freedesktop.Platform.VulkanLayer.MangoHud//$HUD_BRANCH" \
       || echo "NOTE: MangoHud for Heroic isn't on Flathub for $HUD_BRANCH yet."
   fi
-  # Flatpak games need a GL runtime that matches the driver exactly (Bazzite
-  # runs a service for this). Flathub can lag a new driver by a few days.
-  NV_DASHED="$(driver_rpm)"; NV_DASHED="${NV_DASHED//./-}"
-  for gl in GL GL32; do
-    if ! gl_flatpak "$gl" >/dev/null 2>&1; then
-      flatpak install --user -y flathub "org.freedesktop.Platform.$gl.nvidia-$NV_DASHED//1.4" \
-        || echo "NOTE: Flathub doesn't have $gl for this driver yet; retry later with --check."
-    fi
-  done
+  # Flatpak games need a GL runtime that matches the NVIDIA driver exactly (Bazzite
+  # runs a service for this). Flathub can lag a new driver by a few days. Mesa
+  # (AMD, Intel) comes inside the Flatpak runtime, so it needs nothing here.
+  if [[ $GPU == nvidia ]]; then
+    NV_DASHED="$(driver_rpm)"; NV_DASHED="${NV_DASHED//./-}"
+    for gl in GL GL32; do
+      if ! gl_flatpak "$gl" >/dev/null 2>&1; then
+        flatpak install --user -y flathub "org.freedesktop.Platform.$gl.nvidia-$NV_DASHED//1.4" \
+          || echo "NOTE: Flathub doesn't have $gl for this driver yet; retry later with --check."
+      fi
+    done
+  fi
 
   # Let your user use GameMode
   if id -nG "$USER" | grep -qw gamemode; then
@@ -818,12 +1069,11 @@ if $GAMING; then
     sudo usermod -aG gamemode "$USER"
   fi
 
-  # 16 GB NVIDIA shader cache for large libraries. Set for the whole session as
-  # NVIDIA's README advises: an app that sets it alone can make others wipe it.
+  # 16 GB shader cache for large libraries, up from the 1 GB default of both the
+  # NVIDIA driver and Mesa. Set for the whole session as NVIDIA's README advises:
+  # an app that sets it alone can make others wipe it.
   mkdir -p "$HOME/.config/environment.d"
-  cat > "$HOME/.config/environment.d/90-nvidia-shader-cache.conf" <<'EOF'
-__GL_SHADER_DISK_CACHE_SIZE=17179869184
-EOF
+  printf '%s\n' "$SHADER_LINE" > "$SHADER_CONF"
 
   # MangoHud's defaults leave out 1% lows and temperatures. Written only once,
   # because GOverlay and the user edit this file.
@@ -863,8 +1113,9 @@ EOF
     sudo sed -i 's/^#FastConnectable.*/FastConnectable = true/' /etc/bluetooth/main.conf
   fi
 
-  # Per-game wrapper for the newest DLSS. Use it as: dlss-swapper %command%
-  put_file /usr/local/bin/dlss-swapper 0755 <<'EOF' || true
+  # Per-game wrapper for the newest DLSS (NVIDIA only). Use it as: dlss-swapper %command%
+  if [[ $GPU == nvidia ]]; then
+    put_file /usr/local/bin/dlss-swapper 0755 <<'EOF' || true
 #!/usr/bin/bash
 # Newest DLSS for one game. Steam launch option: dlss-swapper %command%
 # GE-Proton and Proton-CachyOS: download newer DLSS DLLs.
@@ -877,6 +1128,7 @@ export DXVK_NVAPI_DRS_NGX_DLSS_RR_OVERRIDE_RENDER_PRESET_SELECTION=render_preset
 export DXVK_NVAPI_DRS_NGX_DLSS_SR_OVERRIDE_RENDER_PRESET_SELECTION=render_preset_latest
 exec "$@"
 EOF
+  fi
 fi
 
 # 9b. Optional extras ------------------------------------------------------
@@ -1004,16 +1256,18 @@ EOF
 
   # Dynamic Boost for laptops. On this desktop it exits with "UnSupported System"
   # at every boot. The driver package only enables it on first install.
-  if powerd_off; then
-    skip "nvidia-powerd"
-  else
-    sudo systemctl disable nvidia-powerd
+  if [[ $GPU == nvidia ]]; then
+    if powerd_off; then
+      skip "nvidia-powerd"
+    else
+      sudo systemctl disable nvidia-powerd
+    fi
   fi
 
   # Both fail at every login on Plasma Wayland: IMSettings doesn't support the
   # desktop, and nvidia-settings has no saved settings to load.
   mkdir -p "$HOME/.config/autostart"
-  for entry in imsettings-start nvidia-settings-user; do
+  for entry in "${AUTOSTARTS_OFF[@]}"; do
     autostart_off "$entry" || printf '[Desktop Entry]\nHidden=true\n' > "$HOME/.config/autostart/$entry.desktop"
   done
 fi
@@ -1045,12 +1299,13 @@ EOF
   fi
 fi
 
-# 12. x3d-mode helper (9950X3D cache/frequency switch) ---------------------
-# Needs BIOS: CPPC Dynamic Preferred Cores = Driver.
-step "Installing x3d-mode helper"
+# 12. x3d-mode helper (two-CCD X3D cache/frequency switch) ----------------
+# Needs BIOS: CPPC Dynamic Preferred Cores = Driver. Skipped on every other CPU.
+if x3d_cpu; then
+  step "Installing x3d-mode helper"
 
-# Root-only setter: accepts exactly "cache" or "frequency", nothing else.
-put_file /usr/local/libexec/x3d-mode-set 0755 <<'EOF' || true
+  # Root-only setter: accepts exactly "cache" or "frequency", nothing else.
+  put_file /usr/local/libexec/x3d-mode-set 0755 <<'EOF' || true
 #!/usr/bin/env bash
 set -euo pipefail
 mode="${1:-}"
@@ -1067,21 +1322,21 @@ fi
 for f in "${files[@]}"; do echo "$mode" > "$f"; done
 EOF
 
-# Allow your user to run only that setter, only with those two values, without a password.
-if x3d_nopasswd >/dev/null 2>&1; then
-  skip "x3d-mode sudo rule"
-else
-  # Checked and written straight from memory: no temp file anywhere.
-  SUDOERS_RULE="$USER ALL=(root) NOPASSWD: /usr/local/libexec/x3d-mode-set cache, /usr/local/libexec/x3d-mode-set frequency"
-  if printf '%s\n' "$SUDOERS_RULE" | sudo visudo -cf - >/dev/null; then
-    printf '%s\n' "$SUDOERS_RULE" | sudo install -m 0440 -o root -g root /dev/stdin /etc/sudoers.d/x3d-mode
+  # Allow your user to run only that setter, only with those two values, without a password.
+  if x3d_nopasswd >/dev/null 2>&1; then
+    skip "x3d-mode sudo rule"
   else
-    echo "WARNING: sudoers rule failed validation; x3d-mode will ask for your password." >&2
+    # Checked and written straight from memory: no temp file anywhere.
+    SUDOERS_RULE="$USER ALL=(root) NOPASSWD: /usr/local/libexec/x3d-mode-set cache, /usr/local/libexec/x3d-mode-set frequency"
+    if printf '%s\n' "$SUDOERS_RULE" | sudo visudo -cf - >/dev/null; then
+      printf '%s\n' "$SUDOERS_RULE" | sudo install -m 0440 -o root -g root /dev/stdin /etc/sudoers.d/x3d-mode
+    else
+      echo "WARNING: sudoers rule failed validation; x3d-mode will ask for your password." >&2
+    fi
   fi
-fi
 
-# User-facing command
-put_file /usr/local/bin/x3d-mode 0755 <<'EOF' || true
+  # User-facing command
+  put_file /usr/local/bin/x3d-mode 0755 <<'EOF' || true
 #!/usr/bin/env bash
 set -euo pipefail
 shopt -s nullglob
@@ -1101,32 +1356,33 @@ fi
 echo "x3d-mode: $(cat "${files[0]}")"
 EOF
 
-# GameMode hook: cache mode while a game runs, back to frequency after.
-if $GAMING; then
-  GM_INI="$HOME/.config/gamemode.ini"
-  mkdir -p "$HOME/.config"
-  if [[ ! -f "$GM_INI" ]]; then
-    cat > "$GM_INI" <<'EOF'
+  # GameMode hook: cache mode while a game runs, back to frequency after.
+  if $GAMING; then
+    GM_INI="$HOME/.config/gamemode.ini"
+    mkdir -p "$HOME/.config"
+    if [[ ! -f "$GM_INI" ]]; then
+      cat > "$GM_INI" <<'EOF'
 [custom]
 start=/usr/local/bin/x3d-mode game
 end=/usr/local/bin/x3d-mode dev
 script_timeout=10
 EOF
-  elif ! grep -q 'x3d-mode game' "$GM_INI"; then
-    echo "NOTE: $GM_INI exists; add these lines under [custom] yourself:"
-    echo "  start=/usr/local/bin/x3d-mode game"
-    echo "  end=/usr/local/bin/x3d-mode dev"
-  fi
-  # GameMode pins by default and only auto-detects the 7900X3D/7950X3D, so turn it
-  # off outright. Limited to the 16 V-Cache threads, Helldivers 2 kept dropping GPU
-  # usage. Cache mode still favours those cores. To try it: pin_cores=0-7,16-23
-  if ! grep -q '^\[cpu\]' "$GM_INI"; then
-    cat >> "$GM_INI" <<'EOF'
+    elif ! grep -q 'x3d-mode game' "$GM_INI"; then
+      echo "NOTE: $GM_INI exists; add these lines under [custom] yourself:"
+      echo "  start=/usr/local/bin/x3d-mode game"
+      echo "  end=/usr/local/bin/x3d-mode dev"
+    fi
+    # GameMode pins by default and only auto-detects the 7900X3D/7950X3D, so turn it
+    # off outright. Limited to the 16 V-Cache threads, Helldivers 2 kept dropping GPU
+    # usage. Cache mode still favours those cores. To try it: pin_cores=0-7,16-23
+    if ! grep -q '^\[cpu\]' "$GM_INI"; then
+      cat >> "$GM_INI" <<'EOF'
 
 [cpu]
 park_cores=no
 pin_cores=no
 EOF
+    fi
   fi
 fi
 
