@@ -328,6 +328,15 @@ function Get-AmdSoftwareLatest {
 # Left out: chipset (installed from AMD directly, newer), GPU drivers, BIOS,
 # RAID and the utilities (Armoury Crate, AI Advisor, ...).
 $AsusSkip = 'VGA|Graphic|Chipset|BIOS|Firmware|SATA|RAID|Software|Utilit|Manual'
+# The same by package title, for such packages filed under "Others".
+$AsusSkipTitle = 'Chipset|BIOS|Firmware|VGA|Graphic'
+# Only hardware ids that name one device count: with a device id (DEV_/PID_,
+# also the codec prefix HDAUDIO\FUNC_01&VEN_10EC&DEV_) or a full ACPI id. A
+# vendor-only or class id (PCI\VEN_10EC, USB\CLASS_E0) would match unrelated
+# hardware of the same maker and is ignored.
+function Select-DeviceIds($ids) {
+  @($ids | Where-Object { $_ -match '(DEV|PID)_' -or $_ -match '^ACPI\\[A-Z0-9]{7,}' })
+}
 
 $script:AsusList = $null
 function Get-AsusPackages {
@@ -359,6 +368,7 @@ function Get-AsusPackages {
         $url = ($f.DownloadUrl.Global -split '\?')[0]
         $file = $url -replace '^.*/', ''
         if ($file -notmatch '\.zip$') { continue }
+        if ($f.Title -match $AsusSkipTitle) { continue }
         # Newest package per driver: the title without version numbers and the
         # "for Windows ..." part. "Realtek RTL8922AE WiFi driver" and "MediaTek
         # MT7925/7927 WiFi Driver" are both kept, because a board can ship with
@@ -369,7 +379,7 @@ function Get-AsusPackages {
         if ($seen.ContainsKey($family)) { continue }
         $seen[$family] = $true
         # "PCI\VEN_10EC&DEV_8125&REV_05" -> "PCI\VEN_10EC&DEV_8125": any revision.
-        $hw = @(@($f.HardwareInfoList) | ForEach-Object { "$($_.hardwareid)".Trim().ToUpperInvariant() -replace '&REV_.*$', '' } |
+        $hw = Select-DeviceIds @(@($f.HardwareInfoList) | ForEach-Object { "$($_.hardwareid)".Trim().ToUpperInvariant() -replace '&REV_.*$', '' } |
           Where-Object { $_ } | Sort-Object -Unique)
         $short = ($f.Title.Trim() -split '(?i)\s+for\s+win')[0].TrimEnd(' ', '.', '-')
         $script:AsusList += [pscustomobject]@{
@@ -392,17 +402,20 @@ function Add-AsusState($file, $outcome) {
 }
 
 # Every device in this PC: its hardware ids and the driver it runs now.
+# Only hardware ids, not compatible ids (those are generic: "any Realtek PCI
+# device"), and only devices that are connected now, not ones Windows
+# remembers from before (error 45 = not present).
 $script:DevInv = $null
 function Get-DeviceInventory {
   if ($null -ne $script:DevInv) { return $script:DevInv }
   $drv = @{}
   Get-CimInstance Win32_PnPSignedDriver | ForEach-Object {
     if ($_.DeviceID) { $drv[$_.DeviceID] = [pscustomobject]@{ Version = (ConvertTo-Version $_.DriverVersion); Provider = "$($_.DriverProviderName)" } } }
-  $script:DevInv = @(Get-CimInstance Win32_PnPEntity | ForEach-Object {
+  $script:DevInv = @(Get-CimInstance Win32_PnPEntity | Where-Object { $_.Present -ne $false -and $_.ConfigManagerErrorCode -ne 45 } | ForEach-Object {
     $d = $drv[$_.PNPDeviceID]
     [pscustomobject]@{
       Id = $_.PNPDeviceID; Name = "$($_.Name)"
-      Hw = @(@($_.HardwareID) + @($_.CompatibleID) | Where-Object { $_ } | ForEach-Object { $_.ToUpperInvariant() })
+      Hw = @(@($_.HardwareID) | Where-Object { $_ } | ForEach-Object { $_.ToUpperInvariant() })
       Version = $(if ($d) { $d.Version } else { $null }); Provider = $(if ($d) { $d.Provider } else { '' }) } })
   return $script:DevInv
 }
@@ -1206,7 +1219,7 @@ if (-not $nodrivers) {
             if ($l -match '^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*(;;.*)?$' -and -not $cfg.ContainsKey($Matches[1])) { $cfg[$Matches[1]] = $Matches[2] }
           }
         }
-        $ids = @("$($cfg['HardwareID'])".Split(',') | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_ })
+        $ids = Select-DeviceIds @("$($cfg['HardwareID'])".Split(',') | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_ })
         if (-not $cfg['SilentInstallRun'] -or $ids.Count -eq 0) {
           Info '  no automatic install in this package, skipped'
           $script:Manual.Add("ASUS $($p.Title): install it from $(Get-BoardSupportUrl)")
