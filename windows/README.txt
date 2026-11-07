@@ -6,14 +6,13 @@ WINDOWS SETUP
 
 Always installed: Windows updates, GPU driver (NVIDIA/AMD), AMD chipset driver,
 ASUS mainboard drivers (only those for your hardware), game runtimes, 7-Zip,
-Steam, Battle.net, gaming settings.
+Steam, Battle.net. Everything is compared with the newest version first: only
+what is missing or outdated gets installed.
 
 ASUS boards: the mainboard drivers (LAN, Wi-Fi, Bluetooth, audio, USB-C) come
 straight from your board's ASUS support page, no DriverHub needed. Only the
 packages for the hardware in your PC are installed, and only when they are
-newer. Handled packages are listed in asus-drivers.txt in this folder, so
-later runs only look at new ones. Other boards: the script shows the support
-page link.
+newer. Other boards: the script shows the support page link.
 
 More apps with flags (run from a terminal in this folder, combine freely):
   windows-setup.cmd -gaming    Epic Games, EA app, Ubisoft Connect, GOG Galaxy
@@ -28,7 +27,9 @@ More apps with flags (run from a terminal in this folder, combine freely):
   windows-setup.cmd -gaming -tuning
 
 Only look, change nothing:   windows-setup.cmd -check
-Skip parts:                  -noupdate  -nodrivers  -noapps  -notweaks
+                             (OK, UPDATE = newer version exists, MISSING)
+Gaming settings:             windows-setup.cmd -tweaks   (off by default)
+Skip parts:                  -noupdate  -nodrivers  -noapps
 The app list is at the top of windows-setup.ps1 and easy to edit.
 
 Files the script writes, all in this folder:
@@ -37,6 +38,5 @@ Files the script writes, all in this folder:
                             same report as -check. Refreshed after every run,
                             or on its own with: windows-setup.cmd -guide
   windows-setup.log         everything the last run printed
-  asus-drivers.txt          ASUS driver packages already handled
   downloads\                installers during a run, deleted at the end
                             (needs about 3 GB free while running)

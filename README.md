@@ -6,7 +6,7 @@ and only does what is missing, so it is safe to re-run.
 | Folder | System | What it sets up |
 |---|---|---|
 | [`fedora/`](fedora/) | Fedora 44/45 KDE | NVIDIA + CUDA or AMD Mesa + ROCm (detected), codecs, dev tools, AI coding CLIs, gaming tools, system tuning, Btrfs snapshots |
-| [`windows/`](windows/) | Windows 10/11 | Windows updates, NVIDIA/AMD GPU driver, AMD chipset driver, ASUS mainboard drivers, game runtimes, Steam, Battle.net, more launchers, tools and dev tools by flag, gaming settings |
+| [`windows/`](windows/) | Windows 10/11 | Windows updates, NVIDIA/AMD GPU driver, AMD chipset driver, ASUS mainboard drivers, game runtimes, Steam, Battle.net, more launchers, tools, dev tools and gaming settings by flag |
 
 ## Download
 
@@ -60,12 +60,12 @@ windows-setup.cmd -gaming -tuning     :: plus more launchers and tuning tools
 
 | Flag | What it does |
 |---|---|
-| `-check` | Show what is installed and active, change nothing (no admin needed) |
+| `-check` | Show what is installed, what has a newer version, change nothing (no admin needed) |
 | `-guide` | Only write the guide (no admin needed) |
 | `-noupdate` | Skip Windows Update |
 | `-nodrivers` | Skip the GPU, chipset and mainboard drivers |
 | `-noapps` | Skip runtimes and launchers |
-| `-notweaks` | Skip the gaming settings |
+| `-tweaks` | Also apply the gaming settings (Game Mode, GPU scheduling, mouse acceleration off, Fast Startup off, ...). Off by default; `-check` shows them either way |
 | `-gaming` | Also install Epic Games, EA app, Ubisoft Connect, GOG Galaxy |
 | `-tuning` | Also install MSI Afterburner + RivaTuner, HWiNFO, CPU-Z, GPU-Z |
 | `-riot` | Also install Valorant, League of Legends |
@@ -74,7 +74,9 @@ windows-setup.cmd -gaming -tuning     :: plus more launchers and tuning tools
 | `-all` | All of the "also install" flags above |
 
 Always installed: Windows updates, GPU and chipset drivers, ASUS mainboard
-drivers, game runtimes, 7-Zip, Steam, Battle.net and the gaming settings.
+drivers, game runtimes, 7-Zip, Steam, Battle.net. The script compares each
+driver and app with the newest version: `-check` marks newer ones as `UPDATE`,
+and a normal run installs only what is missing or outdated.
 `-dev` is roughly the Windows side of the Fedora dev setup; WSL is left out on
 purpose (see the guide). Details: `windows/README.txt`; the full guide
 (`windows-setup-guide.txt`) is written on the first run.
@@ -97,10 +99,12 @@ gets them straight from ASUS. No DriverHub or Armoury Crate needed.
 - **Left out:** chipset (installed from AMD directly, which is newer), the GPU
   driver for the CPU's built-in graphics, BIOS, RAID, and utilities such as
   Armoury Crate.
-- **Re-runs:** every package handled is recorded in `asus-drivers.txt` next to
-  the script. Later runs and `-check` only look at packages ASUS has added
-  since. Failed installs are retried. Delete a line there to make the script
-  look at that package again.
+- **Check:** `-check` compares the driver each matching device runs with the
+  package version (`OK` / `UPDATE` / `MISSING`), using the hardware ids in the
+  ASUS list, so nothing is downloaded. Packages ASUS lists without hardware ids
+  show as `check` until a setup run has opened them once; those are recorded in
+  `C:\ProgramData\pc-setup-scripts\asus-drivers.txt`, so a newer copy of the
+  script still knows them. Delete a line there to look at a package again.
 - **First run:** downloads about 300 MB once. Each package is deleted after it's
   handled.
 
@@ -114,7 +118,7 @@ Each script writes its own files only into its own folder:
 | Script | Files |
 |---|---|
 | Fedora | `fedora-setup-guide.txt`: the guide, with the `--check` report at the end |
-| Windows | `windows-setup-guide.txt`: the guide, with the `-check` report at the end<br>`windows-setup.log`: everything the last run printed<br>`asus-drivers.txt`: the ASUS packages already handled<br>`downloads\`: installers during a run, deleted at the end |
+| Windows | `windows-setup-guide.txt`: the guide, with the `-check` report at the end<br>`windows-setup.log`: everything the last run printed<br>`C:\ProgramData\pc-setup-scripts\asus-drivers.txt`: ASUS packages without hardware ids already handled<br>`downloads\`: installers during a run, deleted at the end |
 
 Outside their folders they only change what they are meant to set up: system
 settings, installed apps and drivers. The Windows script needs about 3 GB free in

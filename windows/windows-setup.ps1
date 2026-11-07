@@ -2,20 +2,20 @@
 Windows 10/11 setup
 Installs: Windows updates, the newest NVIDIA or AMD GPU driver, the AMD chipset
           driver (or Intel's driver assistant), the newest ASUS mainboard drivers
-          that match this PC's hardware, game runtimes, Steam, Battle.net and a
-          few gaming settings. More apps with the flags below.
-It checks what is already set up first and only does what is missing, so it is
-safe to re-run at any time.
+          that match this PC's hardware, game runtimes, Steam, Battle.net.
+          More apps and the gaming settings with the flags below.
+It compares what is installed with the newest version first and only installs
+what is missing or outdated, so it is safe to re-run at any time.
 
 Easiest: double-click windows-setup.cmd (it asks for admin rights).
 Or in PowerShell:  powershell -ExecutionPolicy Bypass -File .\windows-setup.ps1
-  -check      show what is installed/active and change nothing (no admin needed)
+  -check      show what is installed, what has an update, change nothing (no admin needed)
   -guide      only write the instructions file (no admin needed)
   -noupdate   skip Windows Update
   -nodrivers  skip the GPU, chipset and mainboard drivers
   -noapps     skip runtimes and launchers
-  -notweaks   skip the gaming settings
-  App flags (combine as you like, -all for everything):
+  -tweaks     also apply the gaming settings (off by default, see the guide)
+  App flags (combine as you like, -all for all apps):
   -gaming     more launchers: Epic Games, EA app, Ubisoft Connect, GOG Galaxy
   -tuning     MSI Afterburner + RivaTuner, HWiNFO, CPU-Z, GPU-Z
   -riot       Valorant, League of Legends
@@ -31,7 +31,8 @@ param(
   [switch]$noupdate,
   [switch]$nodrivers,
   [switch]$noapps,
-  [switch]$notweaks,
+  [switch]$tweaks,
+  [switch]$notweaks,  # old flag, tweaks are off by default now; kept so old commands still run
   [switch]$gaming,
   [switch]$tuning,
   [switch]$riot,
@@ -50,6 +51,7 @@ $ProgressPreference = 'SilentlyContinue'   # the progress bar makes downloads 10
 $Mode = 'apply'
 if ($guide) { $Mode = 'guide' }
 if ($check) { $Mode = 'check' }
+$DoTweaks = [bool]($tweaks -and -not $notweaks)
 
 function Test-Admin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -64,14 +66,21 @@ if ($Mode -eq 'apply' -and -not (Test-Admin)) {
   exit
 }
 
-# Everything the script writes stays in its own folder: the guide, the log of the
-# last run, the list of handled ASUS packages, and a downloads folder that is
-# emptied at the end of every run.
+# The script writes to its own folder: the guide, the log of the last run, and a
+# downloads folder that is emptied at the end of every run. The list of handled
+# ASUS packages is kept in ProgramData, so a newer copy of the script finds it.
 $ScriptDir     = Split-Path -Parent $PSCommandPath
 $GuideFile     = Join-Path $ScriptDir 'windows-setup-guide.txt'
 $LogFile       = Join-Path $ScriptDir 'windows-setup.log'
-$AsusStateFile = Join-Path $ScriptDir 'asus-drivers.txt'
+$StateDir      = Join-Path $env:ProgramData 'pc-setup-scripts'
+$AsusStateFile = Join-Path $StateDir 'asus-drivers.txt'
 $Downloads     = Join-Path $ScriptDir 'downloads'
+# Older versions kept the list next to the script.
+$OldStateFile  = Join-Path $ScriptDir 'asus-drivers.txt'
+if ($Mode -eq 'apply' -and (Test-Path $OldStateFile) -and -not (Test-Path $AsusStateFile)) {
+  New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+  Move-Item $OldStateFile $AsusStateFile -ErrorAction SilentlyContinue
+}
 $PF86      = ${env:ProgramFiles(x86)}
 
 $script:NeedReboot = $false
@@ -148,6 +157,14 @@ $Apps = @(
   @{ Group = 'dev';    Name = 'Claude Code';        Id = 'Anthropic.ClaudeCode' }
   @{ Group = 'dev';    Name = 'OpenCode';           Id = 'SST.opencode' }
   @{ Group = 'dev';    Name = 'Codex CLI';          Id = 'OpenAI.Codex' }
+)
+# Apps that update themselves. winget often reports an "update" for them that
+# isn't one (the launcher already updated itself), so they are only installed.
+$SelfUpdating = @(
+  'Valve.Steam', 'Blizzard.BattleNet', 'EpicGames.EpicGamesLauncher', 'ElectronicArts.EADesktop',
+  'Ubisoft.Connect', 'GOG.Galaxy', 'RiotGames.Valorant.EU', 'RiotGames.LeagueOfLegends.EUW',
+  'Microsoft.VisualStudioCode', 'Anysphere.Cursor', 'Anthropic.ClaudeCode',
+  'Microsoft.VisualStudio.BuildTools', 'Rustlang.Rustup', 'Microsoft.DirectX'
 )
 # Which flag turns on which group, and the heading in the report.
 $AppGroups = [ordered]@{
@@ -264,9 +281,9 @@ function Find-AmdLink($page, $pattern) {
     return @([regex]::Matches($html, $pattern) | ForEach-Object { $_.Value } | Sort-Object -Unique)
   } catch { return $null }
 }
+$UninstallKeys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
 function Get-AmdChipsetInstalled {
-  $keys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-  $e = Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'AMD Chipset Software*' } | Select-Object -First 1
+  $e = Get-ItemProperty $UninstallKeys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'AMD Chipset Software*' } | Select-Object -First 1
   if ($e) { return ConvertTo-Version $e.DisplayVersion }
   return $null
 }
@@ -281,14 +298,39 @@ function Get-AmdChipsetLatest {
   return $script:ChipLatest
 }
 function Test-AmdSoftware { Test-Path "$env:ProgramFiles\AMD\CNext\CNext\RadeonSoftware.exe" }
+# Adrenalin version as AMD names it (26.10.2), not the Windows driver number
+# (32.0.x), which can't be compared with the download.
+function Get-AmdSoftwareInstalled {
+  if (-not (Test-AmdSoftware)) { return $null }
+  $v = Get-Reg 'HKLM:\SOFTWARE\AMD\CN' 'RadeonSoftwareVersion'
+  if (-not $v) {
+    $e = Get-ItemProperty $UninstallKeys -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -match '^AMD Software' -and "$($_.DisplayVersion)" -match '^\d{2}\.\d{1,2}\.\d+' } | Select-Object -First 1
+    if ($e) { $v = $e.DisplayVersion }
+  }
+  return ConvertTo-Version $v
+}
+# Newest Adrenalin: the version is in the name of AMD's installer
+# (amd-software-adrenalin-edition-26.10.2-minimalsetup-...exe).
+$script:AmdSwLatest = $null
+function Get-AmdSoftwareLatest {
+  if ($script:AmdSwLatest) { return $script:AmdSwLatest }
+  $links = Find-AmdLink $AmdGpuPage 'https://drivers\.amd\.com/drivers/installer/[^"''<> ]+minimalsetup[^"''<> ]+\.exe'
+  $script:AmdSwLatest = $links | ForEach-Object {
+    if ($_ -match 'adrenalin-edition-(\d+\.\d+\.\d+)') { [pscustomobject]@{ Version = (ConvertTo-Version $Matches[1]); Url = $_ } }
+  } | Where-Object { $_.Version } | Sort-Object Version | Select-Object -Last 1
+  return $script:AmdSwLatest
+}
 
 # ASUS mainboard drivers -------------------------------------------------------
 # The same driver list the ASUS support page shows, read from ASUS's own support
-# API. Every ASUS driver zip has an AsusSetup.ini that names the hardware it is
-# for and its silent install command (ASUS DriverHub uses the same file). A
-# package is only installed when one of its hardware ids is in this PC and the
-# installed driver is older. Each package is recorded in $AsusStateFile, so it
-# is downloaded once and a later run only looks at packages ASUS added since.
+# API. The list names the hardware ids each package is for, so the check
+# compares the driver each matching device runs with the package version,
+# without downloading anything. Every ASUS driver zip also has an AsusSetup.ini
+# with the same ids and the silent install command (ASUS DriverHub uses it); the
+# install step checks it again before installing. Packages the list has no
+# hardware ids for are checked through that file once and recorded in
+# $AsusStateFile.
 #
 # Left out: chipset (installed from AMD directly, newer), GPU drivers, BIOS,
 # RAID and the utilities (Armoury Crate, AI Advisor, ...).
@@ -306,6 +348,15 @@ function Get-AsusPackages {
     if (-not $pdid) { Warn "ASUS support does not know the model '$model'"; return $script:AsusList }
     $osid = if ([Environment]::OSVersion.Version.Build -ge 22000) { 52 } else { 45 }   # Windows 11 / 10, 64-bit
     $d = Get-Json "https://www.asus.com/support/api/product.asmx/GetPDDrivers?website=global&model=$m&pdid=$pdid&osid=$osid&cpu="
+    # The hardware ids (HardwareInfoList) are in the support site's newer API; ask
+    # it too if the first answer has none. Without ids the install step still works.
+    $hasIds = @($d.Result.Obj | ForEach-Object { $_.Files } | Where-Object { @($_.HardwareInfoList).Count }).Count
+    if (-not $hasIds) {
+      try {
+        $d2 = Get-Json "https://www.asus.com/support/webapi/product/GetPDDrivers?website=global&model=$m&pdid=$pdid&osid=$osid&cpu=$m&mode=&active="
+        if (@($d2.Result.Obj).Count) { $d = $d2 }
+      } catch {}
+    }
     $seen = @{}
     foreach ($cat in $d.Result.Obj) {
       if ($cat.Name -match $AsusSkip) { continue }
@@ -324,8 +375,13 @@ function Get-AsusPackages {
         $family = $cat.Name + '|' + $key.Trim().ToLowerInvariant()
         if ($seen.ContainsKey($family)) { continue }
         $seen[$family] = $true
+        # "PCI\VEN_10EC&DEV_8125&REV_05" -> "PCI\VEN_10EC&DEV_8125": any revision.
+        $hw = @(@($f.HardwareInfoList) | ForEach-Object { "$($_.hardwareid)".Trim().ToUpperInvariant() -replace '&REV_.*$', '' } |
+          Where-Object { $_ } | Sort-Object -Unique)
+        $short = ($f.Title.Trim() -split '(?i)\s+for\s+win')[0].TrimEnd(' ', '.', '-')
         $script:AsusList += [pscustomobject]@{
-          Category = $cat.Name; Title = $f.Title.Trim(); Version = $f.Version; Url = $url; Sha256 = $f.sha256; File = $file }
+          Category = $cat.Name; Title = $f.Title.Trim(); Short = $short; Version = $f.Version; Url = $url; Sha256 = $f.sha256
+          File = $file; HwIds = $hw }
       }
     }
   } catch { Warn "ASUS driver list failed: $($_.Exception.Message)" }
@@ -333,17 +389,84 @@ function Get-AsusPackages {
 }
 function Get-AsusState {
   $h = @{}
-  if (Test-Path $AsusStateFile) {
-    foreach ($l in Get-Content $AsusStateFile) { $p = $l.Split("`t"); if ($p.Count -ge 2) { $h[$p[0]] = $p[1] } }
+  $f = if (Test-Path $AsusStateFile) { $AsusStateFile } else { $OldStateFile }
+  if (Test-Path $f) {
+    foreach ($l in Get-Content $f) { $p = $l.Split("`t"); if ($p.Count -ge 2) { $h[$p[0]] = $p[1] } }
   }
   return $h
 }
 function Add-AsusState($file, $outcome) {
+  New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
   Add-Content -Path $AsusStateFile -Value "$file`t$outcome"
 }
-function Get-AsusPending {
+
+# Every device in this PC: its hardware ids and the driver it runs now.
+$script:DevInv = $null
+function Get-DeviceInventory {
+  if ($null -ne $script:DevInv) { return $script:DevInv }
+  $drv = @{}
+  Get-CimInstance Win32_PnPSignedDriver | ForEach-Object {
+    if ($_.DeviceID) { $drv[$_.DeviceID] = [pscustomobject]@{ Version = (ConvertTo-Version $_.DriverVersion); Provider = "$($_.DriverProviderName)" } } }
+  $script:DevInv = @(Get-CimInstance Win32_PnPEntity | ForEach-Object {
+    $d = $drv[$_.PNPDeviceID]
+    [pscustomobject]@{
+      Id = $_.PNPDeviceID; Name = "$($_.Name)"
+      Hw = @(@($_.HardwareID) + @($_.CompatibleID) | Where-Object { $_ } | ForEach-Object { $_.ToUpperInvariant() })
+      Version = $(if ($d) { $d.Version } else { $null }); Provider = $(if ($d) { $d.Provider } else { '' }) } })
+  return $script:DevInv
+}
+# Devices with a hardware id that starts with one of $ids. ASUS lists id prefixes
+# (HDAUDIO\FUNC_01&VEN_10EC&DEV_ = every Realtek codec).
+function Find-Devices($ids) {
+  @(Get-DeviceInventory | Where-Object {
+    $d = $_; @($d.Hw | Where-Object { $h = $_; @($ids | Where-Object { $h.StartsWith($_, [StringComparison]::Ordinal) }).Count }).Count })
+}
+
+# What each ASUS package means for this PC:
+#   ok       a matching device runs this version or newer
+#   update   a matching device runs an older vendor driver
+#   missing  a matching device has no driver or only Windows' generic one
+#   notpc    for hardware this PC doesn't have
+#   manual   no automatic install in the package
+#   unknown  no hardware ids in the list and not checked yet (the setup run does)
+$script:AsusStatus = $null
+function Get-AsusStatus {
+  if ($null -ne $script:AsusStatus) { return $script:AsusStatus }
   $state = Get-AsusState
-  @(Get-AsusPackages | Where-Object { -not $state.ContainsKey($_.File) })
+  $all = foreach ($p in @(Get-AsusPackages)) {
+    $s = [pscustomobject]@{ Package = $p; Status = 'unknown'; Want = (ConvertTo-Version $p.Version); Have = $null; Key = $p.File }
+    if (@($p.HwIds).Count) {
+      $m = Find-Devices $p.HwIds
+      if ($m.Count -eq 0) { $s.Status = 'notpc' }
+      else {
+        $s.Key = (@($m | ForEach-Object { $_.Id } | Sort-Object) -join '|')
+        # Windows' generic drivers (Microsoft) use their own numbers: not comparable.
+        $vendor = @($m | Where-Object { $_.Version -and $_.Provider -notmatch 'Microsoft' })
+        if ($vendor.Count -eq 0) { $s.Status = 'missing' }
+        else {
+          $s.Have = ($vendor | Sort-Object Version | Select-Object -Last 1).Version
+          $s.Status = if (-not $s.Want -or $s.Have -ge $s.Want) { 'ok' } else { 'update' }
+        }
+      }
+    } elseif ($state.ContainsKey($p.File)) {
+      $s.Status = switch ($state[$p.File]) {
+        'installed' { 'ok' } 'already up to date' { 'ok' } 'manual' { 'manual' } default { 'notpc' } }
+    }
+    $s
+  }
+  # Several packages for the same devices (an older and a newer driver line):
+  # only the newest one counts. The list order (newest first) is kept.
+  $best = [ordered]@{}
+  foreach ($s in @($all)) {
+    $cur = $best[$s.Key]
+    if (-not $cur -or ($s.Want -and (-not $cur.Want -or $s.Want -gt $cur.Want))) { $best[$s.Key] = $s }
+  }
+  $script:AsusStatus = @($best.Values)
+  return $script:AsusStatus
+}
+# Packages the install step has to look at.
+function Get-AsusPending {
+  @(Get-AsusStatus | Where-Object { $_.Status -in 'update', 'missing', 'unknown' } | ForEach-Object { $_.Package })
 }
 # "V6.0.9600.1", "1125.27.50.919 (WHQL)" -> [version]; $null if there is none.
 function ConvertTo-Version($v) {
@@ -393,6 +516,13 @@ function Test-App($app) {
   & winget list --id $app.Id --exact --accept-source-agreements --disable-interactivity *> $null
   return ($LASTEXITCODE -eq 0)
 }
+# winget knows a newer version than the installed one. Asked by exit code, which
+# doesn't depend on the Windows language: 0 = listed, i.e. an update exists.
+function Test-AppUpdate($app) {
+  if ($SelfUpdating -contains $app.Id -or -not (Test-Winget)) { return $false }
+  & winget list --id $app.Id --exact --upgrade-available --accept-source-agreements --disable-interactivity *> $null
+  return ($LASTEXITCODE -eq 0)
+}
 function Get-SelectedApps {
   $Apps | Where-Object { $AppGroups[$_.Group].On }
 }
@@ -414,7 +544,24 @@ function Get-DxSettings {
   if ($cur) { foreach ($kv in $cur.Split(';')) { if ($kv -match '^(.+?)=(.*)$') { $map[$Matches[1]] = $Matches[2] } } }
   return $map
 }
-function Test-DxSettings { $m = Get-DxSettings; $m['SwapEffectUpgradeEnable'] -eq '1' -and $m['VRROptimizeEnable'] -eq '1' }
+# Windows only writes these values once they are changed in Settings. A missing
+# value means "Windows' default", which is on in current Windows 11:
+#   HAGS: on by default for current GPUs since Windows 11 (build 22000)
+#   windowed-game optimizations and VRR: on by default since 24H2 (build 26100)
+$OsBuild = [Environment]::OSVersion.Version.Build
+function Test-Hags {
+  $v = Get-Reg $RegGfx 'HwSchMode'
+  if ($null -eq $v) { return ($OsBuild -ge 22000) }
+  return ($v -eq 2)
+}
+function Test-DxSettings {
+  $m = Get-DxSettings
+  foreach ($k in 'SwapEffectUpgradeEnable', 'VRROptimizeEnable') {
+    $on = if ($m.Contains($k)) { $m[$k] -eq '1' } else { $OsBuild -ge 26100 }
+    if (-not $on) { return $false }
+  }
+  return $true
+}
 function Test-MouseAccelOff { (Get-Reg $RegMouse 'MouseSpeed') -eq '0' -and (Get-Reg $RegMouse 'MouseThreshold1') -eq '0' -and (Get-Reg $RegMouse 'MouseThreshold2') -eq '0' }
 function Test-DvrOff { (Get-Reg $RegDvr1 'GameDVR_Enabled') -eq 0 -and (Get-Reg $RegDvr2 'AppCaptureEnabled') -eq 0 }
 function Get-ActivePlan { if ((powercfg /getactivescheme) -match '([0-9a-f]{8}-[0-9a-f-]{27})') { $Matches[1] } }
@@ -448,7 +595,7 @@ function Get-RamInfo {
 
 # Status report ----------------------------------------------------------------
 $script:Lines = New-Object System.Collections.Generic.List[string]
-$script:NOk = 0; $script:NMissing = 0; $script:NReboot = 0
+$script:NOk = 0; $script:NMissing = 0; $script:NUpdate = 0; $script:NReboot = 0
 function Row($tag, $text, $color) {
   $line = '  {0,-8} {1}' -f $tag, $text
   $script:Lines.Add($line)
@@ -457,12 +604,30 @@ function Row($tag, $text, $color) {
 function Section($t) { $script:Lines.Add(''); $script:Lines.Add(" $t"); Write-Host ''; Write-Host " $t" }
 function Pass($t)    { Row 'OK' $t; $script:NOk++ }
 function Absent($t)  { Row 'MISSING' $t 'Yellow'; $script:NMissing++ }
+function Outdated($t) { Row 'UPDATE' $t 'Yellow'; $script:NUpdate++ }
 function WaitReboot($t) { Row 'REBOOT' $t 'Yellow'; $script:NReboot++ }
 function Item($label, [scriptblock]$test) { if (& $test) { Pass $label } else { Absent $label } }
 function Note($label) { Row 'info' $label }
+# Installed version against the newest one.
+function Compare-Version($label, $have, $new) {
+  if (-not $have) { Absent "$label not installed$(if ($new) { " (newest: $new)" })" }
+  elseif ($new -and $have -lt $new) { Outdated "$label $have, newer: $new" }
+  else { Pass "$label $have$(if ($new) { ' (newest)' })" }
+}
+# Gaming settings: counted with -tweaks, otherwise only shown.
+function Setting($label, [scriptblock]$test) {
+  if ($DoTweaks) { Item $label $test } elseif (& $test) { Row 'OK' $label } else { Row 'off' $label }
+}
+# An app: counted when its group is on, otherwise only shown.
+function AppRow($app, $counted) {
+  if (-not (Test-App $app)) { if ($counted) { Absent $app.Name } else { Row 'off' $app.Name }; return }
+  if (Test-AppUpdate $app) {
+    if ($counted) { Outdated "$($app.Name): newer version available" } else { Row 'update' "$($app.Name): newer version available" }
+  } elseif ($counted) { Pass $app.Name } else { Row 'OK' $app.Name }
+}
 
 function Report {
-  $script:Lines.Clear(); $script:NOk = 0; $script:NMissing = 0; $script:NReboot = 0
+  $script:Lines.Clear(); $script:NOk = 0; $script:NMissing = 0; $script:NUpdate = 0; $script:NReboot = 0
   $os = Get-CimInstance Win32_OperatingSystem
   $ver = Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' 'DisplayVersion'
   $b = Get-Board
@@ -490,33 +655,41 @@ function Report {
     Section 'Drivers'
     switch (Get-MainGpuVendor) {
       'NVIDIA' {
-        $have = Get-NvidiaInstalled; $new = Get-NvidiaLatest
-        $label = "NVIDIA driver $(if ($have) { $have } else { 'not installed' })"
-        if ($new) { $label += " (newest: $($new.Version))" }
-        if ($have -and (-not $new -or $have -ge $new.Version)) { Pass $label } else { Absent $label }
+        $new = Get-NvidiaLatest
+        Compare-Version 'NVIDIA driver' (Get-NvidiaInstalled) $(if ($new) { $new.Version })
       }
       'AMD' {
-        Item 'AMD Software: Adrenalin Edition' { Test-AmdSoftware }
+        $new = Get-AmdSoftwareLatest; $nv = $(if ($new) { $new.Version })
+        if ((Test-AmdSoftware) -and -not (Get-AmdSoftwareInstalled)) {
+          Pass "AMD Software: Adrenalin Edition (installed, version not readable$(if ($nv) { "; newest: $nv" }))"
+        } else { Compare-Version 'AMD Software: Adrenalin Edition' (Get-AmdSoftwareInstalled) $nv }
       }
       'Intel' { Item 'Intel Driver & Support Assistant' { Test-App @{ Id = 'Intel.IntelDriverAndSupportAssistant' } } }
       default { Note 'No graphics card found' }
     }
     if (Test-AmdCpu) {
-      $have = Get-AmdChipsetInstalled; $new = Get-AmdChipsetLatest
-      $label = "AMD chipset driver $(if ($have) { $have } else { 'not installed' })"
-      if ($new) { $label += " (newest: $($new.Version))" }
-      if ($have -and (-not $new -or $have -ge $new.Version)) { Pass $label } else { Absent $label }
+      $new = Get-AmdChipsetLatest
+      Compare-Version 'AMD chipset driver' (Get-AmdChipsetInstalled) $(if ($new) { $new.Version })
     } else {
       Item 'Intel Driver & Support Assistant (chipset)' { Test-App @{ Id = 'Intel.IntelDriverAndSupportAssistant' } }
     }
     if (Test-AsusBoard) {
-      $asusAll = @(Get-AsusPackages)
-      $pending = @(Get-AsusPending)
-      if ($asusAll.Count -eq 0) { Absent 'ASUS mainboard drivers (could not read the ASUS driver list)' }
-      elseif ($pending.Count -eq 0) { Pass "ASUS mainboard drivers ($($asusAll.Count) packages checked)" }
+      if (@(Get-AsusPackages).Count -eq 0) { Absent 'ASUS mainboard drivers (could not read the ASUS driver list)' }
       else {
-        Absent "ASUS mainboard drivers: $($pending.Count) new package(s) to check (only those for this PC get installed)"
-        foreach ($p in $pending) { Row 'new' "$($p.Category): $($p.Title)" }
+        Write-Host '    (comparing the ASUS driver list with the drivers of this PC)'
+        $st = @(Get-AsusStatus)
+        foreach ($s in $st) {
+          $name = "ASUS $($s.Package.Category): $($s.Package.Short)"
+          switch ($s.Status) {
+            'ok'      { Pass "$name $(if ($s.Have) { $s.Have } else { $s.Want })" }
+            'update'  { Outdated "$name $($s.Have), newer: $($s.Want)" }
+            'missing' { Absent "$name $($s.Want) (the device has no driver or only Windows' generic one)" }
+            'manual'  { Note "$name : no automatic install, get it from the support page" }
+            'unknown' { Row 'check' "$name $($s.Want) (no hardware ids from ASUS, the setup run checks it)" }
+          }
+        }
+        $notPc = @($st | Where-Object { $_.Status -eq 'notpc' }).Count
+        if ($notPc) { Note "$notPc ASUS package(s) are for hardware this PC doesn't have" }
       }
     } else {
       Note "Mainboard drivers: not automated for $((Get-Board).Maker), see the support link below"
@@ -527,27 +700,19 @@ function Report {
     foreach ($grp in $AppGroups.Keys) {
       $info = $AppGroups[$grp]
       Section $info.Title
-      foreach ($a in @($Apps | Where-Object { $_.Group -eq $grp })) {
-        if ($info.On) { Item $a.Name { Test-App $a } }
-        elseif (Test-App $a) { Row 'OK' $a.Name }
-        else { Row 'off' $a.Name }
-      }
+      foreach ($a in @($Apps | Where-Object { $_.Group -eq $grp })) { AppRow $a $info.On }
     }
   }
 
-  if (-not $notweaks) {
-    Section 'Gaming settings'
-    Item 'Game Mode on' { (Get-Reg $RegGameBar 'AutoGameModeEnabled') -ne 0 }
-    $hags = Get-Reg $RegGfx 'HwSchMode'
-    if ($hags -eq 2) { Pass 'Hardware-accelerated GPU scheduling (needed for DLSS Frame Generation)' }
-    else { Absent 'Hardware-accelerated GPU scheduling (needed for DLSS Frame Generation)' }
-    Item 'Optimizations for windowed games + VRR' { Test-DxSettings }
-    Item 'Background game recording off (Game Bar itself stays)' { Test-DvrOff }
-    Item 'Mouse acceleration off' { Test-MouseAccelOff }
-    Item 'Fast Startup off' { (Get-Reg $RegPower 'HiberbootEnabled') -eq 0 }
-    if (Test-X3D) { Item 'Balanced power plan (needed by the X3D V-Cache driver)' { (Get-ActivePlan) -eq $BalancedPlan } }
-    if (Test-DualBoot) { Item 'Clock in UTC (dual boot with Linux)' { (Get-Reg $RegTime 'RealTimeIsUniversal') -eq 1 } }
-  }
+  Section $(if ($DoTweaks) { 'Gaming settings (-tweaks)' } else { 'Gaming settings (only shown; -tweaks applies them)' })
+  Setting 'Game Mode on' { (Get-Reg $RegGameBar 'AutoGameModeEnabled') -ne 0 }
+  Setting 'Hardware-accelerated GPU scheduling (needed for DLSS Frame Generation)' { Test-Hags }
+  Setting 'Optimizations for windowed games + VRR' { Test-DxSettings }
+  Setting 'Background game recording off (Game Bar itself stays)' { Test-DvrOff }
+  Setting 'Mouse acceleration off' { Test-MouseAccelOff }
+  Setting 'Fast Startup off' { (Get-Reg $RegPower 'HiberbootEnabled') -eq 0 }
+  if (Test-X3D) { Setting 'Balanced power plan (needed by the X3D V-Cache driver)' { (Get-ActivePlan) -eq $BalancedPlan } }
+  if (Test-DualBoot) { Setting 'Clock in UTC (dual boot with Linux)' { (Get-Reg $RegTime 'RealTimeIsUniversal') -eq 1 } }
 
   Section 'Info (check in the BIOS if needed, see the guide)'
   Note "Secure Boot: $(Get-SecureBootState)   TPM: $(Get-TpmState)"
@@ -557,7 +722,7 @@ function Report {
   foreach ($g in Get-Gpus) { if ($g.Hz) { Note "$($g.Name): display at $($g.Hz) Hz" } }
   Note "Board drivers and BIOS: $(Get-BoardSupportUrl)"
 
-  $sum = ' Summary: {0} OK, {1} missing, {2} waiting for a reboot' -f $script:NOk, $script:NMissing, $script:NReboot
+  $sum = ' Summary: {0} OK, {1} with an update, {2} missing, {3} waiting for a reboot' -f $script:NOk, $script:NUpdate, $script:NMissing, $script:NReboot
   $script:Lines.Add(''); $script:Lines.Add($sum); Write-Host ''; Write-Host $sum
 }
 
@@ -575,14 +740,14 @@ Log of the last run: $LogFile
 CONTENTS
   1. What the script does          6. Launchers and dev tools
   2. Keeping drivers up to date    7. Anti-cheat
-  3. Mainboard drivers and BIOS    8. Settings changed and how to undo them
+  3. Mainboard drivers and BIOS    8. Gaming settings (-tweaks)
   4. BIOS checklist                9. Troubleshooting
   5. NVIDIA / AMD settings        10. Current system state
 
 
 1. WHAT THE SCRIPT DOES
 -----------------------
-In this order, skipping everything that is already done:
+In this order, skipping everything that is already up to date:
   - Windows Update: all pending system updates plus any optional driver updates.
     GPU drivers from Windows Update are skipped because the script installs
     the newer one from NVIDIA/AMD.
@@ -606,7 +771,7 @@ In this order, skipping everything that is already done:
                 Node.js LTS, C++ Build Tools + Rust, CMake, Ninja, ripgrep,
                 fd, jq, Claude Code, OpenCode, Codex CLI (see section 6)
     Example:  windows-setup.cmd -gaming -tuning
-  - Gaming settings, see section 8.
+  - Gaming settings, only with -tweaks, see section 8.
 
 The app list sits at the top of windows-setup.ps1. Add or remove lines
 there; find package ids with:  winget search <name>
@@ -616,9 +781,11 @@ Run it again after the reboot: Windows Update often has a second round.
 2. KEEPING DRIVERS UP TO DATE
 -----------------------------
 Re-run the script (or -check to only look). It compares the installed NVIDIA
-and AMD chipset driver with the newest one and only installs when there is a
-newer one. For ASUS boards it lists the driver packages ASUS added since the
-last run. In between:
+driver, AMD Software (Adrenalin), AMD chipset driver and, on ASUS boards, the
+driver of every device a mainboard package is for with the newest version, and
+shows UPDATE where a newer one exists. Apps installed with winget get UPDATE
+too (launchers that update themselves are left out). The setup run installs
+exactly those. In between:
   NVIDIA  NVIDIA App > Drivers. "Game Ready" is right for gaming.
   AMD     AMD Software > Settings (gear) > System > Check for updates.
   Apps    winget upgrade --all    (updates everything installed with winget)
@@ -642,7 +809,9 @@ installs it silently with ASUS's own install command, but only if:
   - the installed driver is older, or is Windows' generic driver.
 Left out on purpose: chipset (comes from AMD directly and is newer), GPU
 drivers, BIOS, RAID, and the ASUS utilities (Armoury Crate, AI Advisor).
-What was handled is listed in:
+The check compares versions with the hardware ids from the ASUS list, without
+downloading anything. Packages ASUS lists without hardware ids are opened
+once by the setup run and recorded in:
   $AsusStateFile
 Delete a line there (or the whole file) to make the script look at that
 package again.
@@ -724,8 +893,11 @@ Dev tools (-dev):
     and the X3D V-Cache driver depend on them.
 
 
-8. SETTINGS CHANGED AND HOW TO UNDO THEM
-----------------------------------------
+8. GAMING SETTINGS (-tweaks) AND HOW TO UNDO THEM
+-------------------------------------------------
+Only changed with -tweaks; without it the report only shows them. Settings that
+are already on (also by Windows' default) are left alone. Current Windows 11
+has GPU scheduling, windowed-game optimizations and VRR on by default.
   Game Mode on
       Settings > Gaming > Game Mode.
   Hardware-accelerated GPU scheduling on (needs a reboot)
@@ -760,6 +932,9 @@ Dev tools (-dev):
       Run the line by hand to see the reason:
         winget install --id <Id> --exact --source winget
       The ids are in the app list at the top of the script.
+  An ASUS driver shows UPDATE although it is current
+      ASUS and the driver sometimes number the same version differently.
+      The row shows both numbers; compare them on the ASUS support page.
   An ASUS driver should be installed again
       Delete its line in $AsusStateFile and run the script.
   AMD download opens a web page instead
@@ -774,8 +949,10 @@ Dev tools (-dev):
 10. CURRENT SYSTEM STATE
 ------------------------
 The same report as -check, from when this file was written.
-OK = working   MISSING = not set up   REBOOT = takes effect after a reboot
-off = optional and not installed   new = ASUS package not checked yet
+OK = installed and current   UPDATE = a newer version exists   MISSING = not set up
+REBOOT = takes effect after a reboot   off = optional and not installed/set
+update = optional, installed, newer version exists (not counted)
+check = ASUS package without hardware ids, the setup run checks it
 info = for your information, not counted
 
 "@
@@ -848,10 +1025,18 @@ function Invoke-Installer($file, $arguments, $workDir, $timeoutSec = 1800, [swit
 }
 
 function Install-App($app) {
-  if (Test-App $app) { Skip $app.Name; return }
+  $src = if ($app.Source) { $app.Source } else { 'winget' }
+  if (Test-App $app) {
+    if (-not (Test-AppUpdate $app)) { Skip $app.Name; return }
+    Info "updating $($app.Name)"
+    & winget upgrade --id $app.Id --exact --source $src --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+    $code = $LASTEXITCODE
+    if ($WingetReboot -contains $code) { $script:NeedReboot = $true }
+    elseif ($WingetOk -notcontains $code) { Fail "$($app.Name) did not update (winget code $code)" }
+    return
+  }
   if (-not (Test-Winget)) { Fail "$($app.Name): winget is missing"; return }
   Info "installing $($app.Name)"
-  $src = if ($app.Source) { $app.Source } else { 'winget' }
   $a = @('install', '--id', $app.Id, '--exact', '--source', $src, '--silent',
          '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
   if ($app.Args) { $a += $app.Args }
@@ -956,10 +1141,12 @@ if (-not $nodrivers) {
       }
     }
     'AMD' {
-      if (Test-AmdSoftware) { Skip 'AMD Software: Adrenalin Edition (it updates itself)' }
-      else {
-        $url = @(Find-AmdLink $AmdGpuPage 'https://drivers\.amd\.com/drivers/installer/[^"''<> ]+minimalsetup[^"''<> ]+\.exe')[0]
-        $exe = if ($url) { Get-Installer $url 'Advanced Micro Devices' } else { $null }
+      $have = Get-AmdSoftwareInstalled; $new = Get-AmdSoftwareLatest
+      if ((Test-AmdSoftware) -and (-not $new -or -not $have -or $have -ge $new.Version)) {
+        Skip "AMD Software: Adrenalin Edition $(if ($have) { $have } else { '(version not readable)' })"
+      } else {
+        if ($have) { Info "updating AMD Software $have to $($new.Version)" }
+        $exe = if ($new) { Get-Installer $new.Url 'Advanced Micro Devices' } else { $null }
         if ($exe) {
           Info 'starting the AMD installer: it finds the right driver, follow its window'
           $null = Invoke-Installer $exe
@@ -998,14 +1185,8 @@ if (-not $nodrivers) {
     Step 'Mainboard drivers (ASUS)'
     $pending = @(Get-AsusPending)
     if (@(Get-AsusPackages).Count -eq 0) { Fail "could not read the ASUS driver list, get them from $(Get-BoardSupportUrl)" }
-    elseif ($pending.Count -eq 0) { Skip 'all ASUS driver packages checked' }
+    elseif ($pending.Count -eq 0) { Skip 'all ASUS drivers for this PC are up to date' }
     else {
-      # Hardware ids of every device in this PC, and the driver version each one runs.
-      $devices = @(Get-CimInstance Win32_PnPEntity | ForEach-Object {
-        [pscustomobject]@{ Id = $_.PNPDeviceID; Hw = @(@($_.HardwareID) + @($_.CompatibleID) | Where-Object { $_ } | ForEach-Object { $_.ToUpperInvariant() }) } })
-      $drv = @{}
-      Get-CimInstance Win32_PnPSignedDriver | ForEach-Object {
-        if ($_.DeviceID) { $drv[$_.DeviceID] = [pscustomobject]@{ Version = (ConvertTo-Version $_.DriverVersion); Provider = "$($_.DriverProviderName)" } } }
 
       # Devices a newer package already covered in this run. The list is newest
       # first, so an older package for the same chip is never installed over it.
@@ -1042,8 +1223,7 @@ if (-not $nodrivers) {
           Remove-Item $dir, $zip -Recurse -Force -ErrorAction SilentlyContinue
           continue
         }
-        # ASUS lists id prefixes (HDAUDIO\FUNC_01&VEN_10EC&DEV_ = every Realtek codec).
-        $match = @($devices | Where-Object { $d = $_; @($d.Hw | Where-Object { $h = $_; @($ids | Where-Object { $h.StartsWith($_, [StringComparison]::Ordinal) }).Count }).Count })
+        $match = Find-Devices $ids
         if ($match.Count -eq 0) {
           Info '  not for the hardware in this PC'
           Add-AsusState $p.File 'not for this PC'
@@ -1059,15 +1239,13 @@ if (-not $nodrivers) {
           continue
         }
         # Outdated = no driver, Windows' generic driver (Microsoft, whose version
-        # numbers are not comparable), or an older vendor driver.
+        # numbers are not comparable), or an older vendor driver. Same rule as the check.
         $want = ConvertTo-Version $(if ($cfg['Version']) { $cfg['Version'] } else { $p.Version })
-        $outdated = -not $want
-        $haveText = 'none'
-        foreach ($dv in $fresh) {
-          $cur = $drv[$dv.Id]
-          if ($cur -and $cur.Version) { $haveText = "$($cur.Version) ($($cur.Provider))" }
-          if (-not $want -or -not $cur -or -not $cur.Version -or $cur.Provider -match 'Microsoft' -or $cur.Version -lt $want) { $outdated = $true }
-        }
+        $vendor = @($fresh | Where-Object { $_.Version -and $_.Provider -notmatch 'Microsoft' } | Sort-Object Version)
+        $any = @($fresh | Where-Object { $_.Version } | Select-Object -First 1)
+        $haveText = if ($vendor.Count) { "$($vendor[-1].Version) ($($vendor[-1].Provider))" }
+                    elseif ($any.Count) { "$($any[0].Version) ($($any[0].Provider))" } else { 'none' }
+        $outdated = -not $want -or $vendor.Count -eq 0 -or $vendor[-1].Version -lt $want
         if (-not $outdated) {
           Info "  installed driver is already $haveText"
           Add-AsusState $p.File 'already up to date'
@@ -1105,7 +1283,7 @@ if (-not $noapps) {
   foreach ($a in Get-SelectedApps) { Install-App $a }
 }
 
-if (-not $notweaks) {
+if ($DoTweaks) {
   Step 'Gaming settings'
   function Set-Reg($path, $name, $value, $type, $label) {
     if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
@@ -1113,13 +1291,21 @@ if (-not $notweaks) {
     New-ItemProperty -Path $path -Name $name -Value $value -PropertyType $type -Force | Out-Null
     Info "set: $label"
   }
-  Set-Reg $RegGameBar 'AutoGameModeEnabled' 1 DWord 'Game Mode on'
-  if ((Get-Reg $RegGfx 'HwSchMode') -ne 2) { $script:NeedReboot = $true }
-  Set-Reg $RegGfx 'HwSchMode' 2 DWord 'Hardware-accelerated GPU scheduling'
-  $dx = Get-DxSettings
-  $dx['SwapEffectUpgradeEnable'] = '1'; $dx['VRROptimizeEnable'] = '1'
-  $dxValue = (($dx.Keys | ForEach-Object { "$_=$($dx[$_])" }) -join ';') + ';'
-  Set-Reg $RegDxUser 'DirectXUserGlobalSettings' $dxValue String 'Optimizations for windowed games + VRR'
+  if ((Get-Reg $RegGameBar 'AutoGameModeEnabled') -ne 0) { Skip 'Game Mode on' }
+  else { Set-Reg $RegGameBar 'AutoGameModeEnabled' 1 DWord 'Game Mode on' }
+  # Already on (set, or Windows' default): leave the registry as it is.
+  if (Test-Hags) { Skip 'Hardware-accelerated GPU scheduling' }
+  else {
+    $script:NeedReboot = $true
+    Set-Reg $RegGfx 'HwSchMode' 2 DWord 'Hardware-accelerated GPU scheduling'
+  }
+  if (Test-DxSettings) { Skip 'Optimizations for windowed games + VRR' }
+  else {
+    $dx = Get-DxSettings
+    $dx['SwapEffectUpgradeEnable'] = '1'; $dx['VRROptimizeEnable'] = '1'
+    $dxValue = (($dx.Keys | ForEach-Object { "$_=$($dx[$_])" }) -join ';') + ';'
+    Set-Reg $RegDxUser 'DirectXUserGlobalSettings' $dxValue String 'Optimizations for windowed games + VRR'
+  }
   Set-Reg $RegDvr1 'GameDVR_Enabled' 0 DWord 'Background game recording off'
   Set-Reg $RegDvr2 'AppCaptureEnabled' 0 DWord 'Game Bar captures off'
   Set-Reg $RegMouse 'MouseSpeed' '0' String 'Mouse acceleration off (1/3)'
@@ -1134,6 +1320,7 @@ if (-not $notweaks) {
 }
 
 Step 'Final state'
+$script:DevInv = $null; $script:AsusStatus = $null   # drivers may have changed
 Report
 Write-GuideFile -ReuseReport
 Remove-Item $Downloads -Recurse -Force -ErrorAction SilentlyContinue
