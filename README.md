@@ -16,7 +16,8 @@ Every version is on the [Releases](../../releases) page:
 - `windows-setup-vX.Y.Z.zip`: unzip on the PC, then double-click `windows-setup.cmd`
 - `SHA256SUMS.txt`: checksums of both archives
 
-New release: `git tag v1.2.0 && git push origin v1.2.0`. A GitHub Action
+New release: `git tag v1.2.0 && git push origin v1.2.0`, or without git:
+Actions > Release > Run workflow, enter the version. A GitHub Action
 builds the archives and publishes the release.
 
 ## Fedora

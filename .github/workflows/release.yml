@@ -1,10 +1,18 @@
 # Builds the download archives and publishes a GitHub release for every
-# version tag. To release:  git tag v1.2.0 && git push origin v1.2.0
+# version tag. To release, either:
+#   git tag v1.2.0 && git push origin v1.2.0
+# or, from any browser/the GitHub app: Actions > Release > Run workflow, enter
+# the version. That tags the latest commit on the chosen branch and releases it.
 name: Release
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. v1.2.0'
+        required: true
 
 permissions:
   contents: write
@@ -16,10 +24,29 @@ jobs:
       # Checkout applies .gitattributes, so the Windows files get CRLF here.
       - uses: actions/checkout@v7
 
+      - name: Pick version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            v="$INPUT_VERSION"
+            if ! [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Version must look like v1.2.0 (got: $v)" >&2; exit 1
+            fi
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$v" >/dev/null 2>&1; then
+              echo "Tag $v already exists" >&2; exit 1
+            fi
+          else
+            v="$GITHUB_REF_NAME"
+          fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
       - name: Build archives
         run: |
           set -euo pipefail
-          v="$GITHUB_REF_NAME"
+          v="$VERSION"
           mkdir -p dist
 
           # Fedora: tar.gz keeps the executable bit of fedora-setup.sh.
@@ -45,4 +72,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # --generate-notes lists the changes since the previous release.
-          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+          # --target creates the tag on this commit if it doesn't exist yet (manual runs).
+          gh release create "$VERSION" dist/* --title "$VERSION" --target "$GITHUB_SHA" --generate-notes
