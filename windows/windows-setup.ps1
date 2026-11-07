@@ -800,11 +800,27 @@ function Get-Installer($url, $signer, $name) {
   $out = Join-Path $Downloads $name
   if (-not (Test-Path $out)) {
     Info "downloading $url"
-    try { Start-BitsTransfer -Source $url -Destination $out -ErrorAction Stop }
-    catch {
-      try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out -ErrorAction Stop }
+    # drivers.amd.com only serves files to visitors coming from amd.com; anything
+    # else gets an HTML error page. BITS can't send a Referer, so use a web request.
+    if ($url -match '^https://drivers\.amd\.com/') {
+      $headers = @{ Referer = 'https://www.amd.com/' }
+      try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out -Headers $headers -UserAgent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' -ErrorAction Stop }
       catch { Warn "download failed: $($_.Exception.Message)"; return $null }
+    } else {
+      try { Start-BitsTransfer -Source $url -Destination $out -ErrorAction Stop }
+      catch {
+        try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out -ErrorAction Stop }
+        catch { Warn "download failed: $($_.Exception.Message)"; return $null }
+      }
     }
+  }
+  # A real installer starts with "MZ"; anything else is a web page the server sent instead.
+  $head = [byte[]]::new(2)
+  $fs = [IO.File]::OpenRead($out); try { [void]$fs.Read($head, 0, 2) } finally { $fs.Close() }
+  if ($head[0] -ne 0x4D -or $head[1] -ne 0x5A) {
+    Warn "$name download was blocked (the server sent a web page, not the installer). Download it in a browser, save it as $out, then run this again"
+    Remove-Item $out -Force -ErrorAction SilentlyContinue
+    return $null
   }
   $sig = Get-AuthenticodeSignature $out
   if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch $signer) {
