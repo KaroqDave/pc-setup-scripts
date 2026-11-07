@@ -103,8 +103,8 @@ gets them straight from ASUS. No DriverHub or Armoury Crate needed.
   package version (`OK` / `UPDATE` / `MISSING`), using the hardware ids in the
   ASUS list, so nothing is downloaded. Packages ASUS lists without hardware ids
   show as `check` until a setup run has opened them once; those are recorded in
-  `C:\ProgramData\pc-setup-scripts\asus-drivers.txt`, so a newer copy of the
-  script still knows them. Delete a line there to look at a package again.
+  `asus-drivers.txt` next to the script. Delete a line there to look at a
+  package again.
 - **First run:** downloads about 300 MB once. Each package is deleted after it's
   handled.
 
@@ -118,7 +118,7 @@ Each script writes its own files only into its own folder:
 | Script | Files |
 |---|---|
 | Fedora | `fedora-setup-guide.txt`: the guide, with the `--check` report at the end |
-| Windows | `windows-setup-guide.txt`: the guide, with the `-check` report at the end<br>`windows-setup.log`: everything the last run printed<br>`C:\ProgramData\pc-setup-scripts\asus-drivers.txt`: ASUS packages without hardware ids already handled<br>`downloads\`: installers during a run, deleted at the end |
+| Windows | `windows-setup-guide.txt`: the guide, with the `-check` report at the end<br>`windows-setup.log`: everything the last run printed<br>`asus-drivers.txt`: ASUS packages without hardware ids already handled<br>`downloads\`: installers during a run, deleted at the end |
 
 Outside their folders they only change what they are meant to set up: system
 settings, installed apps and drivers. The Windows script needs about 3 GB free in

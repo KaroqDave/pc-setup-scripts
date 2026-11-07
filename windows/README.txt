@@ -38,5 +38,6 @@ Files the script writes, all in this folder:
                             same report as -check. Refreshed after every run,
                             or on its own with: windows-setup.cmd -guide
   windows-setup.log         everything the last run printed
+  asus-drivers.txt          ASUS packages (without hardware ids) already handled
   downloads\                installers during a run, deleted at the end
                             (needs about 3 GB free while running)

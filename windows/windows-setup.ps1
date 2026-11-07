@@ -66,21 +66,14 @@ if ($Mode -eq 'apply' -and -not (Test-Admin)) {
   exit
 }
 
-# The script writes to its own folder: the guide, the log of the last run, and a
-# downloads folder that is emptied at the end of every run. The list of handled
-# ASUS packages is kept in ProgramData, so a newer copy of the script finds it.
+# Everything the script writes stays in its own folder: the guide, the log of the
+# last run, the list of handled ASUS packages, and a downloads folder that is
+# emptied at the end of every run.
 $ScriptDir     = Split-Path -Parent $PSCommandPath
 $GuideFile     = Join-Path $ScriptDir 'windows-setup-guide.txt'
 $LogFile       = Join-Path $ScriptDir 'windows-setup.log'
-$StateDir      = Join-Path $env:ProgramData 'pc-setup-scripts'
-$AsusStateFile = Join-Path $StateDir 'asus-drivers.txt'
+$AsusStateFile = Join-Path $ScriptDir 'asus-drivers.txt'
 $Downloads     = Join-Path $ScriptDir 'downloads'
-# Older versions kept the list next to the script.
-$OldStateFile  = Join-Path $ScriptDir 'asus-drivers.txt'
-if ($Mode -eq 'apply' -and (Test-Path $OldStateFile) -and -not (Test-Path $AsusStateFile)) {
-  New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
-  Move-Item $OldStateFile $AsusStateFile -ErrorAction SilentlyContinue
-}
 $PF86      = ${env:ProgramFiles(x86)}
 
 $script:NeedReboot = $false
@@ -389,14 +382,12 @@ function Get-AsusPackages {
 }
 function Get-AsusState {
   $h = @{}
-  $f = if (Test-Path $AsusStateFile) { $AsusStateFile } else { $OldStateFile }
-  if (Test-Path $f) {
-    foreach ($l in Get-Content $f) { $p = $l.Split("`t"); if ($p.Count -ge 2) { $h[$p[0]] = $p[1] } }
+  if (Test-Path $AsusStateFile) {
+    foreach ($l in Get-Content $AsusStateFile) { $p = $l.Split("`t"); if ($p.Count -ge 2) { $h[$p[0]] = $p[1] } }
   }
   return $h
 }
 function Add-AsusState($file, $outcome) {
-  New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
   Add-Content -Path $AsusStateFile -Value "$file`t$outcome"
 }
 
